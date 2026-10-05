@@ -13,3 +13,6 @@ __pycache__/
 # Local files
 dev/
 *.local.*
+request.md
+Rx Compiler Specification.pdf
+docs/

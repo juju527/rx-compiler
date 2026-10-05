@@ -22,11 +22,12 @@ git submodule update --init --recursive
 编译 REIMU 需要 Python 3、[xmake](https://xmake.io/) 以及支持 C++23 的编译器。在运行测试前，请在项目根目录下单独编译 REIMU：
 
 ```sh
+sh scripts/prepare_reimu.sh
 xmake f -y -P vendor/REIMU -m release -o target/reimu
 xmake -y -P vendor/REIMU
 ```
 
-在更新 REIMU 子模块后需重复执行上述命令。
+准备步骤会为较新的 C++ 标准库应用兼容性补丁，重复运行也不会重复修改文件。更新 REIMU 子模块后需重复执行上述命令。
 
 如果你想要运行默认的 `rustc` 测试，请先安装 `rustup`，然后运行
 ```sh

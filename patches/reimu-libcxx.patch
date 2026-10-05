@@ -1,0 +1,140 @@
+diff --git a/include/assembly/forward.h b/include/assembly/forward.h
+index 448175d..08e2a8b 100644
+--- a/include/assembly/forward.h
++++ b/include/assembly/forward.h
+@@ -3,6 +3,7 @@
+ #include <cstddef>
+ #include <memory>
+ #include <optional>
++#include <string>
+ #include <string_view>
+ 
+ namespace dark {
+diff --git a/include/libc/utility.h b/include/libc/utility.h
+index 418faa9..be40d0d 100644
+--- a/include/libc/utility.h
++++ b/include/libc/utility.h
+@@ -6,6 +6,7 @@
+ #include "interpreter/memory.h"
+ #include "interpreter/register.h"
+ #include "libc/libc.h"
++#include <bit>
+ #include <cstddef>
+ #include <cstring>
+ 
+diff --git a/include/linker/linker.h b/include/linker/linker.h
+index 6dc3161..eb9f074 100644
+--- a/include/linker/linker.h
++++ b/include/linker/linker.h
+@@ -4,6 +4,7 @@
+ #include <deque>
+ #include <memory>
+ #include <span>
++#include <string_view>
+ #include <unordered_map>
+ 
+ namespace dark {
+diff --git a/include/riscv/command.h b/include/riscv/command.h
+index 1a948ab..2821914 100644
+--- a/include/riscv/command.h
++++ b/include/riscv/command.h
+@@ -2,6 +2,7 @@
+ #include "declarations.h"
+ #include <bit>
+ #include <concepts>
++#include <type_traits>
+ 
+ namespace dark::command {
+ 
+diff --git a/include/simulation/area.h b/include/simulation/area.h
+index f8af9e5..e9ceee8 100644
+--- a/include/simulation/area.h
++++ b/include/simulation/area.h
+@@ -8,6 +8,7 @@
+ #include "linker/layout.h"
+ #include "utility/error.h"
+ #include <algorithm>
++#include <bit>
+ #include <vector>
+ 
+ namespace dark {
+diff --git a/include/utility/error.h b/include/utility/error.h
+index 44d0e24..b47bfd7 100644
+--- a/include/utility/error.h
++++ b/include/utility/error.h
+@@ -2,14 +2,11 @@
+ #include "fmtlib.h"
+ #include <array>
+ #include <cstdlib>
++#include <iostream>
+ #include <source_location>
+ #include <string>
+ #include <string_view>
+ 
+-namespace std {
+-extern std::ostream cerr;
+-} // namespace std
+-
+ namespace dark {
+ 
+ namespace console {
+diff --git a/src/assembly/debug.cpp b/src/assembly/debug.cpp
+index 8a171b8..694c965 100644
+--- a/src/assembly/debug.cpp
++++ b/src/assembly/debug.cpp
+@@ -3,6 +3,8 @@
+ #include "assembly/storage/static.h"
+ #include "fmtlib.h"
+ #include "utility/error.h"
++#include <bit>
++#include <ostream>
+ 
+ namespace dark {
+ 
+diff --git a/src/assembly/static.cpp b/src/assembly/static.cpp
+index 0966b43..c8156ff 100644
+--- a/src/assembly/static.cpp
++++ b/src/assembly/static.cpp
+@@ -1,5 +1,6 @@
+ #include "assembly/storage/static.h"
+ #include "assembly/exception.h"
++#include <bit>
+ 
+ namespace dark {
+ 
+diff --git a/src/interpreter/memory.cpp b/src/interpreter/memory.cpp
+index b23ce07..58c933f 100644
+--- a/src/interpreter/memory.cpp
++++ b/src/interpreter/memory.cpp
+@@ -3,6 +3,7 @@
+ #include "interpreter/exception.h"
+ #include "simulation/area.h"
+ #include "utility/misc.h"
++#include <bit>
+ #include <cstddef>
+ #include <memory>
+ 
+diff --git a/src/linker/encoder.cpp b/src/linker/encoder.cpp
+index 8d84e9b..5afc189 100644
+--- a/src/linker/encoder.cpp
++++ b/src/linker/encoder.cpp
+@@ -13,6 +13,7 @@
+ #include "linker/visitor.h"
+ #include "riscv/command.h"
+ #include "utility/error.h"
++#include <bit>
+ #include <cctype>
+ #include <string>
+ #include <string_view>
+diff --git a/src/linker/estimater.cpp b/src/linker/estimater.cpp
+index e1f2950..02978df 100644
+--- a/src/linker/estimater.cpp
++++ b/src/linker/estimater.cpp
+@@ -4,6 +4,7 @@
+ #include "linker/estimate.h"
+ #include "linker/linker.h"
+ #include "utility/error.h"
++#include <bit>
+ 
+ namespace dark {
+ 
