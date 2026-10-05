@@ -30,10 +30,13 @@ enum class nodeKind {
     ArrayExpr, ArrayRepeatExpr, StructExpr, BlockExpr,
     IfExpr, WhileExpr, LoopExpr, BreakExpr, ReturnExpr, ContinueExpr,
 };
+string node_kind_to_string(nodeKind kind);
+
 enum class Mutability { Immutable, Mutable };
 enum class IntegerBase : std::uint8_t { Binary = 2, Octal = 8, Decimal = 10, Hex = 16 };
+string intbase_to_string(IntegerBase base);
 enum class IntegerSuffix { None, I32, U32, ISize, USize };
-
+string intsuffix_to_string(IntegerSuffix suffix);
 
 class Crate;
 class FunctionItem;
@@ -73,18 +76,11 @@ class ContinueExpr;
 class ASTvisitor {
 public:
     virtual ~ASTvisitor() = default;
-    virtual void visit(const Crate&) = 0;
-    virtual void visit(const FunctionItem&) = 0;
-    virtual void visit(const StructItem&) = 0;
-    virtual void visit(const ConstItem&) = 0;
-    virtual void visit(const ImplItem&) = 0;
     virtual void visit(const UnitType&) = 0;
     virtual void visit(const PathType&) = 0;
     virtual void visit(const RefType&) = 0;
     virtual void visit(const ArrayType&) = 0;
-    virtual void visit(const EmptyStmt&) = 0;
-    virtual void visit(const LetStmt&) = 0;
-    virtual void visit(const ExprStmt&) = 0;
+
     virtual void visit(const IntLiteral&) = 0;
     virtual void visit(const BoolLiteral&) = 0;
     virtual void visit(const UnitExpr&) = 0;
@@ -107,6 +103,18 @@ public:
     virtual void visit(const BreakExpr&) = 0;
     virtual void visit(const ReturnExpr&) = 0;
     virtual void visit(const ContinueExpr&) = 0;
+    
+    virtual void visit(const EmptyStmt&) = 0;
+    virtual void visit(const LetStmt&) = 0;
+    virtual void visit(const ExprStmt&) = 0;
+    
+    
+    virtual void visit(const FunctionItem&) = 0;
+    virtual void visit(const StructItem&) = 0;
+    virtual void visit(const ConstItem&) = 0;
+    virtual void visit(const ImplItem&) = 0;
+    
+    virtual void visit(const Crate&) = 0;
 };
 
 
@@ -163,6 +171,7 @@ struct Binding{
 using GenericArguments = vector<Typenode_ptr>;//显式实参列表
 
 enum class PathSegmentKind { Identifier, SelfValue, SelfType };
+string pathsegmentkind_to_string(PathSegmentKind kind);
 
 struct PathSegment{
     PathSegmentKind kind;
@@ -184,6 +193,7 @@ enum class Receiver{
     SharedReference,   // &self
     MutableReference,  // &mut self：可变引用。
 };
+string receiver_to_string(Receiver receiver);
 
 struct FieldDeclaration {
     Identifier name;
@@ -196,6 +206,7 @@ struct FieldInitializer {
 };
 
 enum class DeriveKind { Copy, Clone, PartialEq, Eq };
+string derivekind_to_string(DeriveKind kind);
 using DeriveAttribute = vector<DeriveKind>;
 
 // Type
@@ -267,6 +278,7 @@ enum class UnaryOp {
     BorrowShared,   // &x
     BorrowMutable,  // &mut x
 };
+string unaryop_to_string(UnaryOp op);
 
 class UnaryExpr final : public Exprnode {
 public:
@@ -283,6 +295,7 @@ enum class BinaryOp {
     Equal, NotEqual, Less, LessEqual, Greater, GreaterEqual,
     LogicalAnd, LogicalOr,  // && 和 || 需要短路求值。
 };
+string binaryop_to_string(BinaryOp op);
 
 class BinaryExpr final : public Exprnode {
 public:
@@ -298,6 +311,7 @@ enum class AssignOp {
     Add, Subtract, Multiply, Divide, Remainder,
     BitAnd, BitOr, BitXor, ShiftLeft, ShiftRight,
 };
+string assignop_to_string(AssignOp op);
 
 class AssignExpr final : public Exprnode {
 public:
