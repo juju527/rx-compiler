@@ -16,7 +16,6 @@ using std::string;
 using std::vector;
 using std::pair;
 using std::shared_ptr;
-using std::unique_ptr;
 using std::move;
 
 enum class nodeKind {
@@ -396,7 +395,7 @@ public:
     void accept(ASTvisitor& visitor) const override {visitor.visit(*this);}
 };
 
-using Block_ptr = unique_ptr<BlockExpr>;
+using Block_ptr = shared_ptr<BlockExpr>;
 
 class IfExpr final : public Exprnode {
 public:
@@ -476,7 +475,7 @@ protected:
     AssociatedItem(size_t id, nodeKind kind): Itemnode(id, kind) {}
 };
 
-using AssociatedItem_ptr = unique_ptr<AssociatedItem>;
+using AssociatedItem_ptr = shared_ptr<AssociatedItem>;
 
 class FunctionItem final : public AssociatedItem {
 public:

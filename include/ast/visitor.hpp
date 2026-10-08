@@ -1,7 +1,9 @@
 #pragma once
+#include <string>   
 #include "ast.hpp"
 
 namespace rx::AST {
+using std::string;
 
 class ASTwalker : public ASTvisitor {
 public:

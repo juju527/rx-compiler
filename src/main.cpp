@@ -1,6 +1,9 @@
 #include <antlr4-runtime.h>
 #include "RxLexer.h"
 #include "RxParser.h"
+#include "ast.hpp"
+#include "builder.hpp"
+#include "visitor.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -24,10 +27,12 @@ int main(int argc, char* argv[]) {
 
     auto* tree = parser.crate();
 
-    if (parser.getNumberOfSyntaxErrors() != 0) {
-        return 1;
-    }
+    if (parser.getNumberOfSyntaxErrors() != 0) return 1;
 
-    std::cout << tree->toStringTree(&parser) << '\n';
+    rx::AST::ASTbuilder builder;
+    auto rt = builder.build(tree);
+    rx::AST::ASTprinter printer;
+    rt->accept(printer);
+
     return 0;
 }

@@ -1,4 +1,4 @@
-#include "include/ast/ast.hpp"
+#include "ast.hpp"
 
 namespace rx::AST {
 string node_kind_to_string(nodeKind kind){
