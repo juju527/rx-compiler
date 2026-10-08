@@ -25,12 +25,10 @@ int main(int argc, char* argv[]) {
     antlr4::CommonTokenStream tokens(&lexer);
     rx::RxParser parser(&tokens);
 
-    auto* tree = parser.crate();
-
-    if (parser.getNumberOfSyntaxErrors() != 0) return 1;
+    if (lexer.getNumberOfSyntaxErrors() != 0 || parser.getNumberOfSyntaxErrors() != 0) return 1;
 
     rx::AST::ASTbuilder builder;
-    auto rt = builder.build(tree);
+    auto rt = builder.build(parser.crate());
     rx::AST::ASTprinter printer;
     rt->accept(printer);
 
