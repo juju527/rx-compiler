@@ -483,12 +483,13 @@ public:
     Receiver receiver;
     vector<Parameter> parameters;
     Typenode_ptr return_type;
+    bool has_lifetime = 0;
     Block_ptr body;  // 可选，顶层函数可以没有 body。
     FunctionItem(size_t id, Identifier name, Block_ptr body = nullptr,
                  vector<Parameter> parameters = {}, Typenode_ptr return_type = nullptr,
-                 Receiver receiver = Receiver())
+                 Receiver receiver = Receiver(), bool has_lifetime = false)
         : AssociatedItem(id, nodeKind::FunctionItem), name(move(name)), receiver(receiver),
-          parameters(move(parameters)), return_type(move(return_type)), body(move(body)) {}
+          parameters(move(parameters)), return_type(move(return_type)), body(move(body)), has_lifetime(has_lifetime) {}
     void accept(ASTvisitor& visitor) const override {visitor.visit(*this);}
 };
 

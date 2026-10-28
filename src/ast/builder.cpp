@@ -129,7 +129,9 @@ any ASTbuilder::visitFunctionDefinition(RxParser::FunctionDefinitionContext* ctx
     Typenode_ptr result_type;
     if (ctx->typeRef()) result_type = type(ctx->typeRef());
     auto body = block(ctx->blockExpression());
-    return make_shared<FunctionItem>(nextId(), move(name), move(body), move(signature.parameters), move(result_type), signature.receiver);
+    auto* generic_params = ctx->genericParams();
+    bool has_lifetime = generic_params && generic_params->lifetimeParam().size() > 0;
+    return make_shared<FunctionItem>(nextId(), move(name), move(body), move(signature.parameters), move(result_type), signature.receiver, has_lifetime);
 }
 any ASTbuilder::visitFunctionParameters(RxParser::FunctionParametersContext* ctx) {
     FunctionParametersResult result;
