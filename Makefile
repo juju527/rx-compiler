@@ -13,9 +13,9 @@ GENERATED_DIR := $(CPP_BUILD_DIR)/generated
 GRAMMAR_COPY_DIR := $(CPP_BUILD_DIR)/grammar
 ANTLR_STAMP := $(CPP_BUILD_DIR)/generated.stamp
 COMPILER := $(CPP_BUILD_DIR)/rx-compiler
-CPP_SOURCES := src/main.cpp $(wildcard src/ast/*.cpp)
-CPP_HEADERS := $(wildcard include/ast/*.hpp)
-CPP_INCLUDE_FLAGS := -Iinclude -Iinclude/ast -I$(GENERATED_DIR) \
+CPP_SOURCES := src/main.cpp $(wildcard src/ast/*.cpp src/semantic/*.cpp)
+CPP_HEADERS := $(wildcard include/ast/*.hpp include/semantic/*.hpp)
+CPP_INCLUDE_FLAGS := -Iinclude -Iinclude/ast -Iinclude/semantic -I$(GENERATED_DIR) \
     -I$(ANTLR4_RUNTIME_PREFIX)/include/antlr4-runtime
 CPP_LINK_FLAGS := -L$(ANTLR4_RUNTIME_PREFIX)/lib -lantlr4-runtime \
     -Wl,-rpath,$(ANTLR4_RUNTIME_PREFIX)/lib
