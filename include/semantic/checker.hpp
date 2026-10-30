@@ -51,7 +51,7 @@ private:
     // declarations.cpp：声明、名字与类型解析、绑定登记、内嵌布局检查。
     void collect(const Crate& crate);
     void addMember(const Itemnode& item, TypeId self);
-    TypeId typeSegment(const PathSegment& segment, NodeId node, TypeId self);
+    TypeId resolveSegment(const PathSegment& segment, NodeId node, TypeId self);
     TypeId resolveType(const Typenode& node, TypeId self);
     optional<ResolvedName> lookupValue(const string& name) const;
     ResolvedName resolveName(const Path& path, NodeId node, TypeId self);
@@ -72,7 +72,7 @@ private:
     ExprInfo value(TypeId type, Flow flow = {}) const;
     void functionBody(NodeId id);
     ExprInfo expression(const Exprnode& node, TypeId expected = unknown);
-    ExprInfo expressionImpl(const Exprnode& node, TypeId expected);
+    ExprInfo resolveExpression(const Exprnode& node, TypeId expected);
     Flow statement(const Stmtnode& node);
     ExprInfo block(const BlockExpr& node, TypeId expected);
     ExprInfo array(const ArrayExpr& node, TypeId expected);

@@ -48,7 +48,7 @@ void verify(const AST::Crate& crate, const SemanticResult& result);
 | `src/semantic/checker.cpp` | analyze、run、fail、入口检查、最终能力补全和 verify |
 | `src/semantic/declaration.cpp` | collect、addMember、typeSegment、resolveType、lookupValue、resolveName、bind、declarations、checkLayouts |
 | `src/semantic/constants.cpp` | integerLiteral、evaluateConstant、constExpr |
-| `src/semantic/capabilities.cpp` | capable、checkDerives |
+| `src/semantic/capabilities.cpp` | 文件内规则查询 supportsDeclared、capable、checkDerives |
 | `src/semantic/body.cpp` | 函数环境、表达式分派、语句、作用域、聚合和控制流；value、sequence、alternatives |
 | `src/semantic/places.cpp` | materialize、dereference、requireMutable、field、index |
 | `src/semantic/conversions.cpp` | coercion、use、consume、merge |
@@ -108,11 +108,11 @@ Checker 将各阶段产生的信息写入 result，分析完成后将整个 Sema
 | `bindings` | LetStmt NodeId → LocalId | statement 调 bind 后登记 | verify、IR 定位 let 的新绑定 |
 | `resolved_types` | Typenode NodeId → TypeId | resolveType | 再次类型查询、verify、IR |
 | `expressions` | **所有 Exprnode** 的 NodeId → ExprInfo | expression、constExpr、负字面量特殊路径；父节点补 use / temporary_type | 所有后续表达式检查、dump、verify、IR |
-| `capabilities` | 每项能力的 TypeId → bool | capable；run 最后补全 | Copy/Move、重复数组、clone、相等比较、IR |
+| `capabilities` | 每项能力的 TypeId → bool | checkDerives 全部成功后由 capable 按需写入；run 最后补全 | Copy/Move、重复数组、clone、相等比较、IR |
 
 参数和 receiver 没有单独的 LetStmt：它们的 LocalId 按顺序放在 `FunctionInfo::parameters`，receiver 在最前；Local.declaration 使用函数 NodeId。不能把所有参数塞到以函数 NodeId 为单一键的 bindings 中。
 
-`field_indices` 是从 fields 推导出的名字索引，属于查找便利性；`capabilities` 是能力结论，不包含已生成的 clone/equality 函数。后续 IR 可用类型结构、字段和能力结论生成 helper，不要求 semantic 再建立一套重复的派生操作表。
+`field_indices` 是从 fields 推导出的名字索引，属于查找便利性。`StructInfo::derives` 保存源码中的显式请求，checkDerives 验证所有请求后，才可作为结构体能力的依据；`capabilities` 缓存验证通过后的类型能力结论，不保存验证期间的临时假设，也不包含已生成的 clone/equality 函数。后续 IR 可用类型结构、字段和能力结论生成 helper，不要求 semantic 再建立一套重复的派生操作表。
 
 ## 4. ExprInfo 的写入协议
 
@@ -212,7 +212,7 @@ analyze → 新 Checker → run
 | collect | AST、基础类型设施 | 所有结构体身份、顶层函数/常量、impl 成员已登记 |
 | declarations | 已登记的所有名字；可递归请求常量 | 常量已求值，字段、derive 请求和函数签名完整 |
 | checkLayouts | 全部字段类型 | 所有结构体内嵌布局无环 |
-| checkDerives | 全部字段与 derive 请求 | 请求的能力满足依赖，能力查询可以缓存 |
+| checkDerives | 全部结构体的字段与 derive 请求已登记 | 所有请求的显式前置要求和字段能力均已验证；允许 capable 查询并缓存能力 |
 | main 检查 | 全局值层和完整签名 | entry 指向顶层函数，参数为空、返回 unit、没有生命周期参数 |
 | functionBody | 全部声明、能力和入口 | 所有函数体均检查；局部、表达式和使用计划完整 |
 | 能力补全 | 函数体可能驻留的新引用/数组等类型 | 每个有效 TypeId 的四项能力可查 |
@@ -281,7 +281,7 @@ fn main() {
 
 declarations 主动求所有常量，再完成结构体字段及 derive 请求，最后解析所有函数签名。必须检查未使用声明。数组长度查询仍可按需递归求常量，不能另加“类型解析期间禁止常量查询”的限制。
 
-字段按声明顺序 push 到 fields，field_indices 记录名字对应下标并发现重复。derives 先记录请求并检查重复，其可行性由 checkDerives 决定。
+字段按声明顺序 push 到 fields，field_indices 记录名字对应下标并发现重复。derives 只记录显式请求并检查重复，包括同组和跨属性的重复；此处不验证字段能力，也不自动补入其他 derive。全部结构体的字段和请求登记完成后，由 checkDerives 逐个验证。
 
 | receiver 写法 | signature.parameters 首项 | functionBody 建立的 self 绑定是否可重绑 |
 | --- | --- | --- |
@@ -295,7 +295,7 @@ declarations 主动求所有常量，再完成结构体字段及 derive 请求�
 
 checkLayouts 对结构体定义做 DFS：沿 fields 和数组 element 递归，遇到引用、Box、Vec 停止。未访问/访问中/已完成三态足够发现内嵌环；状态容器和整数编码是实现选择。`struct Bad { next: Bad }` 拒绝，`struct Node { next: Box<Node> }` 布局可接受。即使某个坏结构体只被 Box 引用，它自己的定义仍需单独检查。
 
-## 7. constants.cpp 与 capabilities.cpp：两类不同的递归
+## 7. constants.cpp 与 capabilities.cpp：常量求值与派生能力验证
 
 ### 7.1 字面量和受限常量
 
@@ -325,9 +325,11 @@ M 的定义使用全局 N，因此长度为 2。如果把最后一行改成 `[0;
 
 当前首错终止设计下，异常会销毁整个 Checker，无须恢复后继续检查。若未来增加错误恢复，才需要保证作用域和求值状态在异常路径也恢复；不能在现有实现中吞掉异常后继续使用半成品状态。
 
-### 7.2 能力图与 derive
+### 7.2 derive：先登记声明，再逐个验证
 
-能力查询必须发生在结构体字段和 derive 请求完整之后。对每项 Capability 分别建依赖，缓存到 result.capabilities。
+declarations 先登记全部结构体的字段和 derive 请求，checkDerives 再逐个验证。查询某个结构体的能力时，只读取它是否显式请求了对应 derive，不展开它的字段；每个结构体的字段要求由自己的 checkDerives 检查负责。
+
+capabilities.cpp 用一个文件内辅助函数 supportsDeclared 统一以下类型规则。它只读取类型和已登记的请求，不写 result.capabilities；checkDerives 和验证成功后的 capable 共用这份规则。
 
 | 类型 | Copy | Clone | PartialEq / Eq |
 | --- | --- | --- | --- |
@@ -336,13 +338,41 @@ M 的定义使用全局 N，因此长度为 2。如果把最后一行改成 `[0;
 | `&mut T` | 无 | 无 | 依赖 T 的对应能力 |
 | `[T; N]` | 依赖 T | 依赖 T | 依赖 T |
 | `Box<T>`、`Vec<T>` | 无 | 依赖 T | 依赖 T |
-| struct | 显式 derive 且所有字段支持 | 同左 | 同左 |
+| struct | 读取对应 derives 项，不展开字段 | 同左 | 同左 |
 
-能力查询也覆盖内部类型：never 的四项能力均记为 true，unknown 均记为 false。checkDerives 检查 Copy 必须同时显式 derive Clone、Eq 必须同时显式 derive PartialEq；同名用户方法不等于能力实现。
+查询也覆盖内部类型：never 的四项能力均为 true，unknown 均为 false。同名用户方法不等于能力实现。结构体是查询的终点；引用、数组和容器按表中规则查询元素类型，因此查询不会沿结构体字段形成递归环。
 
-递归能力按最大不动点计算：先标出结构上可能成立的节点，再把任何失败依赖向父节点传播，直到不再变化。合法递归 `Node { children: Vec<Node> }` 的 Clone 可以成立；环上附加一个不支持 Clone 的字段时，失败必须传遍整个依赖环。不能遇到回边就永久缓存 true。
+checkDerives 遍历全部结构体，包括未使用的声明，对每个结构体执行：
 
-布局环、常量环、能力递归有不同含义：布局环拒绝，常量环拒绝，能力递归本身允许。三者不要复用一个含义模糊的 visited 状态。
+1. 检查 Copy 必须同时显式 derive Clone、Eq 必须同时显式 derive PartialEq，不能自动补齐。
+2. 对每项已请求的能力，逐个字段调用 supportsDeclared；任一字段不满足就报告该结构体、字段和能力并终止分析。
+3. 检查完当前结构体后继续检查其他结构体；只有全部请求通过，才允许进入函数体检查并使用 capable。
+
+核心流程如下，结构体自身的 derive 位不能代替字段验证：
+
+```text
+for 每个结构体 S:
+    检查 S 的显式前置要求
+    for S 请求的每项能力 C:
+        for S 的每个字段 F:
+            若 supportsDeclared(F.type, C) 为 false，则报错并终止
+```
+
+例如，以下互递归声明可以通过 Clone 验证：
+
+```rust
+#[derive(Clone)]
+struct A { children: Vec<B> }
+
+#[derive(Clone)]
+struct B { children: Vec<A> }
+```
+
+检查 A 的字段时，`Vec<B>` 要求 B 声明 Clone，查询在 B 处结束；检查 B 时同理。自递归的 `#[derive(Clone)] struct Node { children: Vec<Node> }` 也按同一规则通过。若 B 没有声明 Clone，检查 A 时拒绝；若 B 增加 `bad: &mut i32` 字段，检查 B 自己的字段时拒绝，即使 A、B 都未使用也一样。此时整个分析终止，不返回语义结果，因此无需再把失败传播回 A。
+
+capable 只在 checkDerives 全部成功后调用：先查询 result.capabilities，未命中时调用 supportsDeclared 并缓存结果。此时所有结构体请求均已验证，读取 derives 得到的就是有效能力；函数体新增的引用、数组和容器类型也使用同一规则。run 最后为全部已驻留类型补齐四项能力结果。
+
+这个方案依赖于全部 derive 都被验证、字段要求必须全部满足且首错终止的约定。常量依赖和内嵌布局仍分别检查并拒绝环；能力查询在结构体处停止，不需要能力环的 visited 状态。
 
 ## 8. body.cpp：表达式、作用域与控制流
 
@@ -499,7 +529,7 @@ methodCall 给 receiver 表达式写 use，包含已走过的解引用和最后�
 
 ### 11.1 verify 的职责和限制
 
-verify 在成功返回之前调用，发现问题抛内部错误。它读取 AST 结构与结果，检查已经约定的不变量；不重新做名称查找、方法搜索、完整 coercion、能力求解或类型检查。
+verify 在成功返回之前调用，发现问题抛内部错误。它读取 AST 结构与结果，检查已经约定的不变量；不重新做名称查找、方法搜索、完整 coercion、派生能力验证或类型检查。
 
 首先检查以下不变量：
 
@@ -544,7 +574,7 @@ Makefile 应纳入 `src/semantic/*.cpp` 和 `include/semantic/*.hpp` 的依赖�
 | 轮次 | 实现内容 | 验收重点 |
 | --- | --- | --- |
 | M0：建立骨架 | 定义类型设施、结果结构和 Checker 接口，实现 Types::format 和诊断出口；接入构建和阶段 CLI | semantic 文件确实参与编译；失败类别明确；空 main 的最小 block/声明/入口链可运行 |
-| M1：完成声明层 | collect、类型/名字查询、常量、字段/签名、布局、能力和 derive | 前向/互递归身份可查；未使用坏声明拒绝；常量/布局/能力三类递归分开 |
+| M1：完成声明层 | collect、类型/名字查询、常量、字段/签名、布局、能力和 derive | 前向/互递归身份可查；先登记全部 derive 再逐个验证字段，未使用坏声明拒绝；常量和布局分别判环 |
 | M2：最小函数闭环 | functionBody、value/expression、字面量/路径、let/block/return；基本 use/coercion；普通函数与 I/O 调用 | `println_i32(1)`、前向函数调用；遮蔽绑定、参数 LocalId、call_target 和 use 可查 |
 | M3：操作与控制流 | 标量运算、cast、赋值、if/loop/while、Flow、PendingUse/merge | 不可达代码仍检查；类型与可达性分离；跳转目标与裸 break 无零记录 |
 | M4：引用和聚合 | 完整 Place、物化、借用/解引用、字段/索引、数组/结构体、引用 coercion | VecGate/共享屏障、原始类型与 target、临时存储、field_order；重跑 M3 的引用合流用例 |
@@ -585,7 +615,8 @@ M0 的空 main 闭环只需实现支持范围内的真实逻辑；M1 之后 use�
 - 位置：materialize 保留原 Value/type；临时根可查；共享屏障和 VecGate 经过后续投影不丢失。
 - 控制流：不可达 tail 的类型仍检查，break 值仍参与定型；目标属于正确循环/函数；没有 expressions[0]。
 - 方法：首个候选选中后不因权限、参数或目标返回类型回退；Box/Vec clone 不误选成元素 clone。
-- 能力：合法递归通过，坏字段失败沿依赖环传播；inherent clone 不冒充 Clone 能力。
+- 能力：合法自递归和互递归通过；缺少显式 derive 或含不支持能力的字段时拒绝，包括未使用声明，并且不受声明顺序影响；重复请求和缺少显式前置 derive 时拒绝；inherent clone 不冒充 Clone 能力。
+- 能力结果：checkDerives 全部成功后才写 capabilities；结构体能力与已验证的 derives 一致，函数体新增类型的四项能力在返回前补全。
 - 会话与内部错误：连续 analyze 不串状态；损坏结果被 verify 拒绝；内部错误不以退出 1 冒充正常拒绝。
 
 ### 13.3 官方测试基线与分组
@@ -643,7 +674,7 @@ IR 接收 AST 与 SemanticResult：AST 决定语法结构、子表达式和源�
 | 比较/运算时如何读取操作数 | operation 和子表达式 use；具体操作符仍来自 AST |
 | 按什么顺序初始化哪个字段 | AST 初始化顺序和 field_order |
 | return / break / continue 跳往哪里 | jump_target |
-| 是否支持 Copy/Clone/PartialEq/Eq | capabilities，结合 types 和 structs 的结构信息 |
+| 是否支持 Copy/Clone/PartialEq/Eq | checkDerives 成功后缓存并最终补全的 capabilities |
 
 后续 lowering 可区分 emitPlace、emitValue、emitUse：前者计算位置，第二个产生值，第三个应用本表达式已记录的使用计划。缺记录是内部契约错误，不能默认 i32 或字段 0。无 use 的 Callable、投影 base、受限常量按各自角色处理。
 
@@ -658,7 +689,7 @@ Semantic 阶段完成时应满足：
 - [ ] 统一 expressions 覆盖全部 Exprnode，包括类型中的长度；没有 NodeId=0 的伪记录。
 - [ ] use、operation、callable、call_target 及其余 optional 字段遵守第 4 节归属；声明、局部、绑定和类型节点保留各自结果表。
 - [ ] 原类型、使用目标和临时存储分开；投影保留权限但不复制来源专属信息。
-- [ ] 常量依赖、内嵌布局和递归能力分别处理；函数体新增类型的能力已补全。
+- [ ] 常量依赖和内嵌布局分别判环；全部 derive 先登记再逐个验证字段，成功后才查询和缓存有效能力；函数体新增类型的能力已补全。
 - [ ] 成功返回前调用 verify；错误分为正常拒绝与内部故障，连续分析互不污染。
 - [ ] 官方 semantic 和后续合法源码的 semantic-only 扫描通过，并有针对关键结果的结构断言。
 - [ ] 能用具体 Rx 程序解释各字段由谁生成、何时写入、谁来使用；关键语义规则和设计约定均有独立测试。
