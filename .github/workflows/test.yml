@@ -33,8 +33,8 @@ jobs:
           git diff --exit-code -- generated/
           test -z "$(git ls-files --others --exclude-standard -- generated/)"
 
-      - name: Run Semantic tests without a generator
+      - name: Run Semantic tests from standalone judge config
         run: |
-          make test STAGE=semantic FILTER=official:semantic \
+          make -f tests/custom/oj/Makefile test STAGE=semantic FILTER=official:semantic \
             CXX=g++ \
             ANTLR=false

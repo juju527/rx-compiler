@@ -11,6 +11,8 @@
 
 当前 C++ 实现可直接运行 `make -j2 build`，或用 `make test STAGE=semantic FILTER=official:semantic` 验证语义阶段。普通构建只需要 C++17 编译器、Make 和 `ar`：`generated/` 中的 Lexer/Parser 源码及 `vendor/antlr4-runtime/` 中的官方 ANTLR 4.13.2 运行库源码随仓库提交，运行库静态链接，无需 Java、`antlr`、系统 ANTLR 运行库或联网下载。修改 `grammar/` 后，在本机用 ANTLR 4.13.2 运行 `make generate`，并一并提交更新后的 `generated/`。OJ 提交时选择 **C / C++**，使用 `config.mk` 中的构建和语义检查命令；参见 [OJ 依赖说明](https://rxoj.site/#about/cpp)。
 
+提交前可运行 `make -f tests/custom/oj/Makefile test STAGE=semantic FILTER=official:semantic`。它独立读取 `config.mk` 来构建并测试，检查评测命令是否依赖根 Makefile 中才有的变量；CI 也使用这个入口。`SEMANTIC` 应明确指定编译器路径，不能依赖只在根 Makefile 中定义的 `COMPILER`。
+
 欢迎来到 Rx Compiler！本仓库提供了一个工程模板，供你基于此构建自己的 [Rx 编程语言](https://acmclasscourse-2025.github.io/rx-compiler-specification/) 编译器。它包含了官方测试用例、测试脚手架以及 Rx 语言的 G4 文法定义，帮助你快速起步。
 
 我们强烈建议你 **Fork 本仓库**，以便我们在更新官方测试用例时你可以方便地同步更新。Fork 之后，将其克隆到你的本地。

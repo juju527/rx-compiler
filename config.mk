@@ -7,7 +7,8 @@
 BUILD = $(MAKE) -j2 build
 
 # Required for semantic tests: exit 0 to accept {source}, 1 to reject it.
-SEMANTIC = $(COMPILER) --stage semantic {source}
+# Keep this command usable when config.mk is loaded without the root Makefile.
+SEMANTIC = ./.antlr/rx-compiler --stage semantic {source}
 
 # Configure when IR generation is implemented: write RV32 LLVM IR to {output} (.ll).
 IR =
