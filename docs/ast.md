@@ -398,9 +398,9 @@ make run SOURCE=path/to/program.rx
 ./.antlr/rx-compiler path/to/program.rx
 ```
 
-构建依赖 ANTLR 命令、ANTLR C++ runtime 和支持 C++17 的编译器。Makefile 默认使用 `clang++`、`antlr`，runtime 前缀为 `/opt/homebrew/opt/antlr4-cpp-runtime`，可通过 `CXX`、`ANTLR`、`ANTLR4_RUNTIME_PREFIX` 等变量覆盖。
+普通构建只依赖支持 C++17 的系统编译器、Make 和 `ar`，直接编译仓库中 `generated/` 下的源码，以及 `vendor/antlr4-runtime/` 中的官方 ANTLR 4.13.2 运行库，静态链接为 `.antlr/rx-compiler`，不运行 ANTLR 生成器、不联网。推荐 `make -j2 build`。可以通过 `CXX` 覆盖系统编译器；若明确希望链接已安装的 ANTLR 4.13.2 动态运行库，可指定 `ANTLR4_RUNTIME_PREFIX`（例如 Mac 上的 `/opt/homebrew/opt/antlr4-cpp-runtime`）。
 
-`make generate` 将原始文法复制为 `RxLexer.g4` / `RxParser.g4`，避免名字与运行库冲突，再以 `-Dlanguage=Cpp -visitor -no-listener -package rx` 生成到 `.antlr/generated/`。应修改 `grammar/` 下的原始文件，不手工维护生成文件。
+只有修改文法时才需要本地执行 `make generate`（要求 ANTLR 4.13.2，命令可通过 `ANTLR` 覆盖）。它将原始文法复制为 `RxLexer.g4` / `RxParser.g4`，避免名字与运行库冲突，再以 `-Dlanguage=Cpp -visitor -no-listener -package rx` 生成到 `.antlr/generated/`，将 C++ 源文件和头文件复制到 `generated/`。请一并提交文法与生成文件，不手工维护生成文件；CI 会重新生成并检查差异。`make clean` 保留已提交的生成源码。
 
 当前 driver 只接收一个源文件路径：成功打印 AST 后返回 0，检测到词法或语法错误返回 1，参数数量不对或文件打不开返回 2。builder 的内部异常或终止不属于这组正常返回约定。当前没有 `--stage` 或 `--dump-ast` 参数，也尚未调用语义分析。
 

@@ -20,28 +20,21 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake curl default-jre-headless python3 unzip
+          sudo apt-get install -y build-essential curl default-jre-headless python3
 
-      - name: Install ANTLR generator and C++ runtime
+      - name: Install ANTLR generator for the regeneration check
         run: |
           curl -fsSL --retry 3 "https://www.antlr.org/download/antlr-${ANTLR_VERSION}-complete.jar" \
             -o "$RUNNER_TEMP/antlr.jar"
-          curl -fsSL --retry 3 "https://www.antlr.org/download/antlr4-cpp-runtime-${ANTLR_VERSION}-source.zip" \
-            -o "$RUNNER_TEMP/antlr4-runtime.zip"
-          unzip -q "$RUNNER_TEMP/antlr4-runtime.zip" -d "$RUNNER_TEMP/antlr4-runtime"
-          cmake -S "$RUNNER_TEMP/antlr4-runtime" -B "$RUNNER_TEMP/antlr4-build" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/antlr4" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DANTLR_BUILD_CPP_TESTS=OFF \
-            -DANTLR_BUILD_STATIC=OFF
-          cmake --build "$RUNNER_TEMP/antlr4-build" --parallel 2
-          cmake --install "$RUNNER_TEMP/antlr4-build"
 
-      - name: Run Semantic tests
+      - name: Verify generated parser sources
+        run: |
+          make generate ANTLR="java -jar $RUNNER_TEMP/antlr.jar"
+          git diff --exit-code -- generated/
+          test -z "$(git ls-files --others --exclude-standard -- generated/)"
+
+      - name: Run Semantic tests without a generator
         run: |
           make test STAGE=semantic FILTER=official:semantic \
-            CXX=clang++ \
-            ANTLR="java -jar $RUNNER_TEMP/antlr.jar" \
-            ANTLR4_RUNTIME_PREFIX="$RUNNER_TEMP/antlr4"
+            CXX=g++ \
+            ANTLR=false
