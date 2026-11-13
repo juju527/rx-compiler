@@ -1,6 +1,7 @@
 #pragma once
 
 #include "semantic.hpp"
+#include "dispatch.hpp"
 
 using std::optional;
 using std::map;
@@ -9,7 +10,15 @@ namespace rx::semantic {
 
 using namespace rx::AST;
 
-class Checker {
+class Checker : private ASTvisitor<Checker, ExprInfo, TypeId>,
+                private ASTvisitor<Checker, Flow>,
+                private ASTvisitor<Checker, TypeId, TypeId> {
+    using ExpressionVisitor = ASTvisitor<Checker, ExprInfo, TypeId>;
+    using StatementVisitor = ASTvisitor<Checker, Flow>;
+    using TypeVisitor = ASTvisitor<Checker, TypeId, TypeId>;
+    friend ExpressionVisitor;
+    friend StatementVisitor;
+    friend TypeVisitor;
 public:
     // checker.cpp：分析总流程
     SemanticResult run(const Crate& crate);
@@ -53,6 +62,10 @@ private:
     void addMember(const Itemnode& item, TypeId self);
     TypeId resolveSegment(const PathSegment& segment, NodeId node, TypeId self);
     TypeId resolveType(const Typenode& node, TypeId self);
+    TypeId visit(const UnitType& node, TypeId self);
+    TypeId visit(const PathType& node, TypeId self);
+    TypeId visit(const RefType& node, TypeId self);
+    TypeId visit(const ArrayType& node, TypeId self);
     optional<ResolvedName> lookupValue(const string& name) const;
     ResolvedName resolveName(const Path& path, NodeId node, TypeId self);
     LocalId bind(const string& name, TypeId type, bool mut, NodeId declaration);
@@ -72,24 +85,32 @@ private:
     ExprInfo value(TypeId type, Flow flow = {}) const;
     void functionBody(NodeId id);
     ExprInfo expression(const Exprnode& node, TypeId expected = unknown);
-    ExprInfo resolveExpression(const Exprnode& node, TypeId expected);
     Flow statement(const Stmtnode& node);
-    ExprInfo block(const BlockExpr& node, TypeId expected);
-    ExprInfo array(const ArrayExpr& node, TypeId expected);
-    ExprInfo repeat(const ArrayRepeatExpr& node, TypeId expected);
-    ExprInfo structure(const StructExpr& node);
-    ExprInfo conditional(const IfExpr& node, TypeId expected);
-    ExprInfo loop(const LoopExpr& node, TypeId expected);
-    ExprInfo whileLoop(const WhileExpr& node);
-    ExprInfo breakExpr(const BreakExpr& node);
+    ExprInfo visit(const IntLiteral& node, TypeId expected);
+    ExprInfo visit(const BoolLiteral& node, TypeId expected);
+    ExprInfo visit(const UnitExpr& node, TypeId expected);
+    ExprInfo visit(const PathExpr& node, TypeId expected);
+    ExprInfo visit(const ContinueExpr& node, TypeId expected);
+    ExprInfo visit(const ReturnExpr& node, TypeId expected);
+    Flow visit(const EmptyStmt& node);
+    Flow visit(const LetStmt& node);
+    Flow visit(const ExprStmt& node);
+    ExprInfo visit(const BlockExpr& node, TypeId expected);
+    ExprInfo visit(const ArrayExpr& node, TypeId expected);
+    ExprInfo visit(const ArrayRepeatExpr& node, TypeId expected);
+    ExprInfo visit(const StructExpr& node, TypeId expected);
+    ExprInfo visit(const IfExpr& node, TypeId expected);
+    ExprInfo visit(const LoopExpr& node, TypeId expected);
+    ExprInfo visit(const WhileExpr& node, TypeId expected);
+    ExprInfo visit(const BreakExpr& node, TypeId expected);
 
     // places.cpp：临时位置、解引用、访问权限及字段/下标投影。
     ExprInfo materialize(ExprInfo info, NodeId node);
     bool canDereference(TypeId type) const;
     ExprInfo dereference(ExprInfo info, NodeId node);
     void requireMutable(const ExprInfo& info, NodeId node);
-    ExprInfo field(const FieldExpr& node);
-    ExprInfo index(const IndexExpr& node);
+    ExprInfo visit(const FieldExpr& node, TypeId expected);
+    ExprInfo visit(const IndexExpr& node, TypeId expected);
 
     // conversions.cpp：隐式转换、使用计划与公共类型。
     optional<vector<Adjustment>> coercion(TypeId source, TypeId target) const;
@@ -99,18 +120,18 @@ private:
 
     // operators.cpp：一元/二元运算、赋值和显式 as 转换。
     TypeId scalarOperand(const ExprInfo& info, NodeId node) const;
-    ExprInfo unary(const UnaryExpr& node);
+    ExprInfo visit(const UnaryExpr& node, TypeId expected);
     OperatorInfo checkBinaryOperands(BinaryOp op, const ExprInfo& left, const ExprInfo& right, NodeId node);
-    ExprInfo binary(const BinaryExpr& node);
-    ExprInfo assignment(const AssignExpr& node);
-    ExprInfo cast(const CastExpr& node);
+    ExprInfo visit(const BinaryExpr& node, TypeId expected);
+    ExprInfo visit(const AssignExpr& node, TypeId expected);
+    ExprInfo visit(const CastExpr& node, TypeId expected);
 
     // calls.cpp：可调用目标、内建签名、普通调用与点方法查找。
     CallableInfo callable(ResolvedName name, NodeId where);
     optional<CallableInfo> associated(TypeId type, const string& name);
     vector<CallableInfo> methods(TypeId receiver, const string& name);
-    ExprInfo call(const CallExpr& node);
-    ExprInfo methodCall(const MethodCallExpr& node);
+    ExprInfo visit(const CallExpr& node, TypeId expected);
+    ExprInfo visit(const MethodCallExpr& node, TypeId expected);
 };
 
 };

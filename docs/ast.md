@@ -1,8 +1,8 @@
-# AST 阶段框架设计
+# AST 阶段实现说明
 
 AST 模块使用 C++17，位于 `include/ast/` 和 `src/ast/`，命名空间为 `rx::AST`。它接收 ANTLR 生成的解析树，构造独立于 Parser 的抽象语法树，供遍历、调试和后续语义分析使用。
 
-本文按当前代码说明节点模型、构建协议、语法归一化、访问方式和测试入口。后续名称解析、类型检查及结果保存方式见 [Semantic 阶段实施指南](semantic.md)；该指南中的接入计划不代表当前 AST driver 已实现相应功能。
+本文按当前代码说明节点模型、建树协议、分类 `accept`、模板 `ASTvisitor`、默认遍历及测试入口。语义检查通过同一套 Visitor 分派，具体的类型、名字、上下文和结果表约定见 [Semantic 阶段实现说明](semantic.md)。
 
 ## 1. 阶段边界与文件职责
 
@@ -17,11 +17,11 @@ flowchart LR
     Check -->|是| Builder[ASTbuilder]
     Check -->|否| Reject[退出码 1]
     Builder --> Crate[Crate 与 AST 子节点]
-    Crate --> Printer[ASTprinter]
-    Crate -. 后续接入 .-> Semantic[语义分析]
+    Crate -. 可选调试 .-> Printer[ASTprinter]
+    Crate --> Semantic[语义分析]
 ```
 
-当前 [main.cpp](../src/main.cpp) 先执行 `parser.crate()`，再检查 Lexer 和 Parser 的错误数；有错误时直接返回，不把 ANTLR 错误恢复产生的树交给 builder。通过后调用 `ASTbuilder::build`，再由 `ASTprinter` 输出 AST。
+当前 [main.cpp](../src/main.cpp) 先执行 `parser.crate()`，再检查 Lexer 和 Parser 的错误数；有错误时直接返回，不把 ANTLR 错误恢复产生的树交给 builder。通过后调用 `ASTbuilder::build`，再执行 `Checker::run`。`ASTprinter` 的调试调用目前被注释。
 
 AST 阶段负责保留程序的语法结构，并消除后续阶段不需要的解析细节：
 
@@ -30,7 +30,7 @@ AST 阶段负责保留程序的语法结构，并消除后续阶段不需要的�
 - 保留整数原始拼写、可变性、receiver、显式类型实参、derive 分组和分号信息。
 - 把块内语句与尾表达式分开，区分“缺省”与显式 `()`。
 
-名字是否存在、类型是否匹配、赋值目标是否可写、常量的值与范围、方法选择、跳转是否合法，都由后续语义阶段判断。AST builder 不做类型推导、常量折叠、借用检查，也不生成 IR。例如，`i32` 对应的 `PathType` 仍是类型语法，`AssignExpr` 的存在也不代表左侧已经通过可写性检查。
+名字是否存在、类型是否匹配、赋值目标是否可写、常量的值与范围、方法选择、跳转是否合法，都由后续语义阶段判断。AST builder 不做类型推导、常量折叠或借用检查。例如，`i32` 对应的 `PathType` 仍是类型语法，`AssignExpr` 的存在也不代表左侧已经通过可写性检查。
 
 ### 1.2 文件分工
 
@@ -38,26 +38,32 @@ AST 阶段负责保留程序的语法结构，并消除后续阶段不需要的�
 | --- | --- |
 | [grammar/Lexer.g4](../grammar/Lexer.g4) | 词法规则、整数拼写和多字符标点的拆分约定 |
 | [grammar/Parser.g4](../grammar/Parser.g4) | 语法入口、优先级、结合性及条件/语句边界 |
-| [include/ast/ast.hpp](../include/ast/ast.hpp) | 节点、枚举、辅助结构、指针别名和纯虚 `ASTvisitor` 接口；不依赖 ANTLR |
+| [include/ast/ast.hpp](../include/ast/ast.hpp) | 节点、枚举、辅助结构、指针别名、分类模板 `accept` 和 `ASTvisitor` 前置声明；不依赖 ANTLR |
+| [include/ast/dispatch.hpp](../include/ast/dispatch.hpp) | `ASTvisitor<Derived, Result, Args...>` 的分类分派；不依赖 semantic |
 | [src/ast/ast.cpp](../src/ast/ast.cpp) | 节点种类、操作符、receiver 等枚举的字符串转换 |
 | [include/ast/builder.hpp](../include/ast/builder.hpp) | ANTLR Visitor 适配、构建结果类型、临时 plan 和 builder 内部接口 |
 | [src/ast/builder.cpp](../src/ast/builder.cpp) | 各语法规则到 AST 的转换、节点 ID 分配和归一化 |
 | [include/ast/visitor.hpp](../include/ast/visitor.hpp)、[src/ast/visitor.cpp](../src/ast/visitor.cpp) | 默认递归遍历 `ASTwalker` 与文本输出 `ASTprinter` |
-| [src/main.cpp](../src/main.cpp) | 文件读取、解析、错误检查、建树和打印 |
-| [Makefile](../Makefile) | 生成 ANTLR C++ 文件，编译 driver 和 AST 模块 |
+| [src/main.cpp](../src/main.cpp) | 文件读取、解析、错误检查、建树和语义分析 |
+| [Makefile](../Makefile) | 生成 ANTLR C++ 文件，编译 driver、AST 和 semantic 模块 |
 | [tests/custom/ast/probe.cpp](../tests/custom/ast/probe.cpp)、[scripts/test_ast.py](../scripts/test_ast.py) | 独立建树、结构检查、精确结构比较和回归测试 |
 
 ## 2. 节点模型与所有权
 
 ### 2.1 基类、身份和分派
 
-所有节点继承 `ASTnode`，共同保存 `size_t id` 和 `const nodeKind kind`，并实现：
+所有节点继承 `ASTnode`，共同保存 `size_t id` 和 `const nodeKind kind`。基类保留虚析构函数，访问入口则是非虚的转发模板：
 
 ```cpp
-virtual void accept(ASTvisitor& visitor) const = 0;
+template<class Visitor, class... Args>
+decltype(auto) accept(Visitor& visitor, Args&&... args) const {
+    return visitor.dispatch(*this, forward<Args>(args)...);
+}
 ```
 
-具体节点的 `accept` 调用 `visitor.visit(*this)`，将处理分派到具体类型的重载。`nodeKind` 则支持按枚举分支处理和调试输出；枚举必须与实际动态类型一致。当前共有 34 种具体节点：
+`ASTnode`、各类别基类及 `Crate` 分别定义这个入口；具体叶节点继承所属类别的 `accept`。这样 `*this` 的静态类别决定使用哪个 `dispatch` 重载，`node.kind` 再决定调用哪个具体节点的 `visit`。枚举必须与节点实际类型一致，完整分派规则见 [第 8 节](#visitor-redesign)。
+
+当前共有 34 种具体节点：
 
 | 类别 | 基类 / 层次 | 数量 |
 | --- | --- | ---: |
@@ -87,7 +93,7 @@ AST 中的字符串、容器和子节点都独立拥有数据，不保存 Token�
 
 | 结构 | 字段与含义 |
 | --- | --- |
-| `Identifier` | `std::string`，保存名字文本 |
+| `Identifier` | `string`，保存名字文本 |
 | `Binding` | `name`、`mutability`；用于 let 和普通参数 |
 | `PathSegment` | `kind`、`name`、`args`；区分普通名字、值 `self`、类型 `Self` |
 | `Path` | `vector<PathSegment>`，按源码顺序保存路径段 |
@@ -171,18 +177,18 @@ receiver 独立保存，不混入普通参数列表：
 
 ## 4. ASTbuilder 的构建协议
 
-### 4.1 ANTLR Visitor 与 std::any
+### 4.1 ANTLR Visitor 与 any
 
-`ASTbuilder` 继承生成的 `rx::RxParserBaseVisitor`。ANTLR 的规则访问接口返回 `std::any`，builder 用 `take<T>(node)` 调用 `visit(node)` 并精确取出结果：
+`ASTbuilder` 继承生成的 `rx::RxParserBaseVisitor`。ANTLR 的规则访问接口返回 `any`，builder 用 `take<T>(node)` 调用 `visit(node)` 并精确取出结果：
 
 ```cpp
 template<class T>
 T take(antlr4::tree::ParseTree* node) {
-    return std::any_cast<T>(visit(node));
+    return any_cast<T>(visit(node));
 }
 ```
 
-`std::any_cast` 不会自动把 `shared_ptr<Derived>` 转成 `shared_ptr<Base>`。每个 visit 方法必须遵守调用方约定的**确切返回类型**，不能因为对象可向上转型，就直接把具体指针存入 any。
+`any_cast` 不会自动把 `shared_ptr<Derived>` 转成 `shared_ptr<Base>`。每个 visit 方法必须遵守调用方约定的**确切返回类型**，不能因为对象可向上转型，就直接把具体指针存入 any。
 
 | 规则 / 辅助入口 | any 中的结果类型 |
 | --- | --- |
@@ -221,7 +227,7 @@ T take(antlr4::tree::ParseTree* node) {
 
 builder 覆盖了 `visitChildren`，不会继承 BaseVisitor 的默认聚合结果；`visitTerminal` 返回 `Ignored`，无语义内容的文法规则也显式忽略。这样，节点构造依赖明确的规则分派。
 
-当前 `visitChildren`、`visitErrorNode` 以及 `binaryToken` 的未识别分支使用裸 `throw;`。在没有正在处理的异常时进入这些分支会终止进程，不能当作正常的语法拒绝机制。调用方必须先检查解析错误；新增规则也必须补齐 builder 分派。若后续完善诊断，应将这些内部失败改为明确的实现错误，并与源码的词法/语法错误分开。
+当前 `visitChildren`、`visitErrorNode` 以及 `binaryToken` 的未识别分支使用裸 `throw;`。在没有正在处理的异常时进入这些分支会终止进程，不能当作正常的语法拒绝机制。调用方必须先检查解析错误；新增规则也必须补齐 builder 分派。
 
 ## 5. 表达式归一化
 
@@ -355,22 +361,97 @@ builder 忠实保留 Parser 的分组，不按预期语义重新解释。例如�
 
 当前泛型形参文法只接收生命周期形参；类型实参节点的存在不能解释为已经支持用户自定义的一般类型泛型。当前 AST 没有源码范围字段，也没有 NodeId 到源码位置的映射；后续若需要精确诊断，应在前端适配层建立并保存相应信息。
 
-## 8. ASTvisitor、ASTwalker 与 ASTprinter
+<a id="visitor-redesign"></a>
 
-这套接口访问的是已建成的 AST，与 `RxParserBaseVisitor` 访问解析树的职责不同：
+## 8. 分类 accept、ASTvisitor 与默认遍历
 
-- `ASTvisitor` 是纯虚接口，为全部具体节点声明 `visit(const T&)`。
-- `ASTwalker` 为各节点实现默认的子节点递归，叶节点不做操作。
-- `ASTprinter` 继承 walker，打印节点名、ID、字段和缩进层次；部分节点复用 walker，部分自行组织子节点输出。
+### 8.1 Visitor 的类型参数和职责
 
-walker 会遍历嵌在辅助结构里的节点，包括路径段的类型实参、方法的类型实参、参数类型、结构体字段类型和字段初始化值。只遍历显眼的表达式指针会漏掉这些节点。
+`ast.hpp` 声明模板及默认返回类型，`dispatch.hpp` 在具体节点定义完整后实现分派：
 
-扩展一次普通的结构访问，可以只覆盖关心的节点，并调用基类保留递归：
+```cpp
+template<class Derived, class Result = void, class... Args>
+class ASTvisitor;
+```
+
+`Derived` 是具体处理类，`Result` 是一次访问的返回类型，`Args...` 是每次调用接收的附加参数。Visitor 将自身转换为 `Derived&`，再调用该类的 `visit` 重载。这种模板继承方式通常称为 CRTP。
+
+`ASTvisitor` 只选择当前节点的处理函数。它不自动访问子节点，不保存“上一次结果”，也不管理作用域、期望类型或语义结果表。递归顺序和结果组合由具体处理类决定。因此 AST 头文件不需要知道 `ExprInfo`、`Flow` 等语义类型。
+
+这套接口与 `ASTbuilder` 使用的 ANTLR Visitor 分开：前者处理已经建立的 AST，后者处理解析树并通过 `any` 交付建树结果。ASTvisitor 自身的 `visit` 调用不依赖虚函数；Walker 为结构遍历额外保留虚函数，见下文。
+
+### 8.2 分类 dispatch 的覆盖范围
+
+[dispatch.hpp](../include/ast/dispatch.hpp) 提供七个重载：
+
+| 入口的静态类型 | 要求处理的具体节点 | 数量 |
+| --- | --- | ---: |
+| `Exprnode` | 所有表达式 | 22 |
+| `Stmtnode` | EmptyStmt、LetStmt、ExprStmt | 3 |
+| `Typenode` | UnitType、PathType、RefType、ArrayType | 4 |
+| `AssociatedItem` | FunctionItem、ConstItem | 2 |
+| `Itemnode` | FunctionItem、StructItem、ConstItem、ImplItem | 4 |
+| `Crate` | 直接调用 `visit(const Crate&, ...)` | 1 |
+| `ASTnode` | 全部具体节点 | 34 |
+
+除 Crate 直接调用外，各入口按 `node.kind` 使用显式 switch，将节点转换为相应具体类型，再返回 `pass.visit(node, forward<Args>(args)...)`。枚举、前置声明和 switch 都直接写在 C++ 中。
+
+只调用表达式入口时，只实例化表达式分派函数，不要求处理类同时实现类型、语句和声明。该函数中的 22 个分支都必须有效，不能因为本次输入恰好是 IntLiteral 就省掉其他表达式处理函数。通过 `ASTnode` 入口访问则需要完整节点集合。
+
+分派依赖 AST 的类别及 kind 一致性；不匹配的分支使用 `__builtin_unreachable()` 标记，不执行运行时类别检查。新增节点时必须同步维护所属类别及 ASTnode 的分派。模板实例化能发现缺少可调用的 visit；只声明而不定义可能到链接时才暴露，而完全漏写 switch 分支需要通过覆盖核对发现。
+
+### 8.3 accept 保留静态类别
+
+每个类别基类都定义自己的 `accept`，避免继承入口把 `*this` 统一退化成 `ASTnode`。例如：
+
+```cpp
+#include "ast/dispatch.hpp"
+
+using namespace rx::AST;
+
+struct StatementCounter : ASTvisitor<StatementCounter, int> {
+    int visit(const EmptyStmt&) { return 0; }
+    int visit(const LetStmt&) { return 1; }
+    int visit(const ExprStmt&) { return 1; }
+};
+
+int countStatement(const Stmtnode& node) {
+    StatementCounter counter;
+    return node.accept(counter);
+}
+```
+
+这个处理类只需三个语句重载。`LetStmt` 继承 Stmtnode 的入口，直接对 LetStmt 调用 accept 也会使用语句分类。`FunctionItem` 继承 AssociatedItem 的入口；经 `Itemnode&` 访问同一节点时则使用声明分类。`Crate` 自己的入口只要求根节点处理。
+
+同一对象通过不同静态类型访问，所需处理集合可能不同。将仅处理表达式的 Visitor 用于 `const ASTnode&`，会实例化全部节点的分支，不能只依据对象的实际 kind 判断它能否编译。
+
+### 8.4 参数、返回值与递归
+
+accept 的 `Args&&...` 接收并转发调用参数；dispatch 的 `Args...` 则由 Visitor 实例确定：
+
+| 模板参数 | 调用含义 |
+| --- | --- |
+| `Result = void` | 只执行访问，无结果对象 |
+| `Result = T` | 直接返回本次结果，允许移动专用类型 |
+| `Result = T&` 或 `const T&` | 保留引用返回；被引用对象由处理类或调用方管理 |
+| `Args` 中的普通值类型 | 按值接收，再向 visit 转发 |
+| `Context&` / `const Context&` | 使用调用方的上下文对象，不复制、不由基类保存 |
+| `T&&` | 接收并继续转发右值引用 |
+
+`decltype(auto)` 使 accept 保留 dispatch 的值或引用返回类型。每层递归可以用局部变量接收各个子节点的返回值，后一次调用不会覆盖前一次调用的结果；Visitor 基类没有共享结果槽。
+
+递归是否经过 accept 由处理类的入口契约决定。Checker 对子节点调用 `expression`、`consume`、`statement` 或 `resolveType`，这些入口分别负责结果登记、使用计划、控制流或缓存。直接调用子节点的 visit/dispatch/accept 会绕过这些动作，详见 [语义结果的写入协议](semantic.md#result-protocol)。
+
+### 8.5 ASTwalker 与 ASTprinter
+
+[ASTwalker](../include/ast/visitor.hpp) 继承 `ASTvisitor<ASTwalker>`，返回类型使用默认的 void，同时把各个具体 `visit` 声明为 virtual。模板分派先选中具体节点重载，随后虚调用仍能到达 ASTprinter 或其他 Walker 子类的 override；Walker 递归访问子节点时也保持这一行为。
+
+Walker 为所有节点提供默认结构遍历，叶节点不做操作。它还访问辅助结构中的类型实参、参数类型、字段类型和初始化表达式，不只访问显眼的表达式指针。扩展结构访问时可以覆盖关心的节点，再调用基类继续递归：
 
 ```cpp
 class CallCounter : public rx::AST::ASTwalker {
 public:
-    std::size_t calls = 0;
+    int calls = 0;
 
     void visit(const rx::AST::CallExpr& node) override {
         ++calls;
@@ -379,11 +460,11 @@ public:
 };
 ```
 
-这个例子只统计普通 `CallExpr`；需要统计点方法调用时，还应覆盖 `MethodCallExpr`。若覆盖后不调用基类，就需要自行处理所有相关子节点。
+这里仅统计 CallExpr；点方法调用需另行覆盖 MethodCallExpr。若不调用基类，处理函数就负责安排该节点的全部递归。
 
-walker 是结构遍历，不处理作用域、短路、不可达分支或运行时求值顺序。例如其 `LetStmt` 实现先访问 initializer，再访问 annotation；printer 则先显示 annotation。需要类型上下文或名字环境的语义检查应显式安排自己的顺序。
+Walker 按结构访问，不能代表语义或运行时求值顺序。例如 LetStmt 的默认遍历先访问 initializer、再访问 annotation，而 Checker 先解析注解。逻辑运算的两侧、不可达语句也都会被 Walker 访问。
 
-当前 printer 直接写入 `std::cout`，用于人工检查，不是稳定的序列化协议。新增的 `FunctionItem::has_lifetime` 尚未在 printer 中显示，也未进入现有 probe 的 JSON 字段；不能用打印或现有结构快照确认该字段已被验证。
+ASTprinter 继承 Walker，直接写入 cout，用节点名、ID、字段和缩进显示结构。它不是稳定的序列化协议。`FunctionItem::has_lifetime` 尚未在 printer 或现有 probe 的 JSON 中显示，这两个输出不能单独证明该字段正确。
 
 ## 9. 构建、运行与验证
 
@@ -402,7 +483,7 @@ make run SOURCE=path/to/program.rx
 
 只有修改文法时才需要本地执行 `make generate`（要求 ANTLR 4.13.2，命令可通过 `ANTLR` 覆盖）。它将原始文法复制为 `RxLexer.g4` / `RxParser.g4`，避免名字与运行库冲突，再以 `-Dlanguage=Cpp -visitor -no-listener -package rx` 生成到 `.antlr/generated/`，将 C++ 源文件和头文件复制到 `generated/`。请一并提交文法与生成文件，不手工维护生成文件；CI 会重新生成并检查差异。`make clean` 保留已提交的生成源码。
 
-当前 driver 只接收一个源文件路径：成功打印 AST 后返回 0，检测到词法或语法错误返回 1，参数数量不对或文件打不开返回 2。builder 的内部异常或终止不属于这组正常返回约定。当前没有 `--stage` 或 `--dump-ast` 参数，也尚未调用语义分析。
+当前 driver 接收源文件路径并解析 `--stage` 参数，但实际流程统一执行到语义分析：成功返回 0，词法/语法错误或语义 Diagnostic 返回 1，文件错误或捕获到的内部异常返回 2。AST 打印调用被注释，也没有 `--dump-ast` 开关。阶段选择的后续扩展应保留上述前端处理顺序。
 
 ### 9.2 独立 AST 测试
 
@@ -431,17 +512,24 @@ target/ast-tests/ast-probe expression \
 
 `--tree` 额外输出原始 ANTLR 解析树，用来区分 Parser 分组和 builder 转换。probe 的退出码 0 表示成功，1 表示词法/语法拒绝，捕获到的构建/结构异常返回 2；脚本将崩溃、异常和超时视为失败。访问到的文法规则数用于观察覆盖范围，不是分支覆盖率。
 
-现有 `make test` 跳过 lex / parse 阶段，且 [config.mk](../config.mk) 仍配置 Rust 参考实现，不能替代这套 AST 测试。当前主 Makefile 的 `CPP_SOURCES` 也只包含 `src/main.cpp` 与 `src/ast/*.cpp`，尚未将 semantic 模块接入编译。
+现有 `make test` 跳过 lex / parse 阶段，不能替代这套 AST 测试。[config.mk](../config.mk) 已配置当前 C++ 语义分析器，可运行 `make test STAGE=semantic FILTER=official:semantic`。
 
 ## 10. 扩展时需要保持的契约
 
 新增一个节点或语法分支时，应按依赖顺序同步：
 
 1. 调整原始文法并重新生成 Parser，确认解析树的边界和结合性。
-2. 在 `ast.hpp` 中补节点、`nodeKind`、前置声明和 `ASTvisitor::visit`；在 `ast.cpp` 中补枚举显示。
+2. 在 `ast.hpp` 中补节点、`nodeKind` 和前置声明；在 `ast.cpp` 中补枚举显示，并在 `dispatch.hpp` 的所属类别与 ASTnode 分派中补分支。
 3. 在 builder 中补规则返回协议及构造逻辑，明确必需字段、可空字段和归一化策略。
 4. 为 walker 和 printer 补访问逻辑，覆盖辅助结构中嵌入的类型和表达式节点。
 5. 为 probe 和结构用例补字段检查、树形预期及必要反例，再运行 AST 测试。
-6. 若改变 AST 交给后续阶段的信息，同步语义输入契约；新增源码定位或语义结果应有明确归属。
+6. 为使用该类别的处理类补齐 visit。Checker 的表达式、语句、类型处理分别返回 ExprInfo、Flow、TypeId；语义子节点继续通过原有登记入口递归。
+7. 若改变 AST 交给后续阶段的信息，同步语义输入契约；新增源码定位或语义结果应有明确归属。
 
 交付给语义阶段的 AST 应满足：ID 非零且在树内唯一，kind 与动态类型一致，必需子节点非空，列表顺序保留，尾表达式只出现一次，整数拼写完整，并且不依赖 ANTLR 对象的生存期。语义合法性则由后续阶段独立判断。
+
+## 11. 后续 IR 阶段的接口规划
+
+后续 IR lowering 可以继续使用 ASTvisitor，为具体处理过程选择返回类型和上下文参数。AST 与 Visitor 基类应保持对后端类型无感，lowering 自行管理函数状态、基本块和结果表示。
+
+规划中，AST 应提供语法结构与子节点顺序，SemanticResult 应提供已经确定的身份、类型、位置、调用目标和调整计划。短路、分支、循环及重复数组需要各自安排生成次序，不能直接把 Walker 的结构递归作为执行顺序。语义结果如何供这一阶段使用，见 [Semantic 的 IR 接口规划](semantic.md#ir-plan)。

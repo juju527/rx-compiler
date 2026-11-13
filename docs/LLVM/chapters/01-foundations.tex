@@ -1,0 +1,188 @@
+\lesson{先读懂一个完整模块}{sec:first}
+\aim{认识模块、全局数据、函数、基本块和指令，能解释打印 42 的完整执行路径。}
+
+LLVM IR 是带类型的中间表示。文本形式通常保存为 \code{.ll}。它已经把源语言中的“表达式和语句”拆成了更明确的计算、读写与跳转，但还没有指定某个值必须放进哪一个 RISC-V 物理寄存器。
+
+本项目的链路可以画成：
+\begin{center}
+\begin{tikzpicture}[node distance=6mm]
+\node[flowbox] (a) {AST\\语义结果};
+\node[flowbox,right=of a] (b) {结构化 IR\\文本 .ll};
+\node[flowbox,right=of b] (c) {Clang 22\\RV32IM 汇编};
+\node[flowbox,right=of c] (d) {REIMU\\运行输出};
+\draw[flowarrow] (a)--(b);
+\draw[flowarrow] (b)--(c);
+\draw[flowarrow] (c)--(d);
+\end{tikzpicture}
+\end{center}
+
+你的生成器负责前两个方框之间的转换。当前语义旁表告诉它“这个调用选中了 \code{PrintlnI32}，这个字面量是 \code{i32} 的 42”；生成器据此创建指令，而不是重新解析 \code{println\_i32} 这个名字。
+
+\subsection{打印 42：完整例子}
+配套文件：\code{examples/01\_print42.ll}。其中 \code{println\_i32} 是讲义定义的内部包装函数，输出整数后补一个换行，对应 Rx 的同名内建操作。
+\lstinputlisting{examples/01_print42.ll}
+
+\subsection{从文件结构读到执行顺序}
+\begin{tabularx}{\linewidth}{@{}p{42mm}Y@{}}
+\toprule
+代码部分 & 如何理解 \\
+\midrule
+\code{target datalayout} & 描述目标上的大小和对齐。后面专门解释，初学时先保持项目给出的值。\\
+\code{target triple} & 指定 RV32 裸机目标。它是配置，不是运行时指令。\\
+\code{@.line} & 一份全局格式字符串。四个字节为 \code{\%}、\code{d}、换行、零字节。\\
+\code{declare @printf} & 这里只有接口，具体实现由运行环境提供。\\
+\code{define ...} & 定义一个有函数体的函数。\\
+\code{entry:} & 基本块的标签；这个名字可以换成 \code{b0}。\\
+\code{call ...} & 调用函数。参数写出类型和值。\\
+\code{ret ...} & 返回并终结当前基本块。\\
+\bottomrule
+\end{tabularx}
+
+执行从机器入口 \code{@main} 开始，随后调用 \code{@rx\_source\_main}，再调用本例的 \code{@println\_i32}，最终由 \code{@printf} 输出。源 main 正常结束时返回 \code{void}；最外层机器 main 返回整数 0。
+
+为什么保留两个 main？Rx 的源 \code{main} 是普通的 Unit 函数，源程序也可能递归调用它。机器入口负责把最初那次调用正常完成转换成状态码 0。这个区别与项目的入口规划一致。
+
+\subsection{单独拆开 call 指令}
+\begin{lstlisting}
+%written = call i32 (ptr, ...) @printf(ptr @.line, i32 %x)
+\end{lstlisting}
+\begin{itemize}
+ \item \code{\%written}：本条指令的结果名，类型为 \code{i32}。
+ \item \code{call}：操作码，表示调用。
+ \item \code{i32 (ptr, ...)}：被调函数的类型，返回整数，固定参数是一个指针，其余是可变参数。
+ \item \code{@printf}：调用目标。
+ \item \code{ptr @.line}：格式串地址；\code{i32 \%x}：要打印的整数。
+\end{itemize}
+printf 的返回值表示打印结果，和源程序要输出的数字不是同一个东西。这里保留了结果名但不再使用它；调用产生的输出副作用仍然发生。
+
+\takeaway{先辨认一段代码是“模块声明”还是“函数内指令”。全局格式串不会按行执行；真正的执行顺序由函数调用和基本块跳转决定。}
+\checkq{把源函数中的 42 改成 43，需要改格式字符串吗？答案：不需要，只改变调用实参。}
+\srcref{https://releases.llvm.org/22.1.0/docs/LangRef.html\#module-structure}{LLVM 22：模块结构}
+
+\lesson{名字、类型、常量与目标信息}{sec:syntax}
+\aim{读懂常见符号和类型写法，并区分“源语言类型”“LLVM 计算类型”“内存存储类型”。}
+
+\subsection{先记住五种写法}
+\begin{tabularx}{\linewidth}{@{}p{38mm}Y@{}}
+\toprule
+写法 & 意义 \\
+\midrule
+\code{@name} & 模块中的全局对象或函数名字，例如 \code{@main}。\\
+\code{\%value} & 函数内 SSA 值、参数；命名结构体类型也使用 \code{\%}，要结合位置判断。\\
+\code{entry:} & 定义基本块标签；跳转引用它时写 \code{label \%entry}。\\
+\code{; comment} & 分号开始注释，一直到行尾；分号不是语句结束符。\\
+\code{\%r = add i32 1, 2} & 定义计算结果 \code{\%r}。这里的等号不会改变已有的 \code{\%r}。\\
+\bottomrule
+\end{tabularx}
+
+空白主要用来分隔语法元素，缩进用于阅读。建议始终使用有意义的显式名字，例如 \code{\%x.addr}、\code{\%x.value}、\code{loop.test:}，避免初学时同时处理匿名数字编号规则。LLVM 的这些名字和 Rx 局部变量名没有必须一一相同的要求。
+
+\subsection{本项目需要的类型}
+\begin{tabularx}{\linewidth}{@{}p{39mm}Y@{}}
+\toprule
+类型语法 & 读法与用途 \\
+\midrule
+\code{i1} & 一个比特的整数，通常作为条件值。\\
+\code{i8} & 八位整数；项目用于 bool 的内存表示和字符串字节。\\
+\code{i32} & 32 位整数。Rx 的四种整数类型都用它承载位模式。\\
+\code{ptr} & 指针。当前 LLVM 的指针类型本身不写被指向的元素类型。\\
+\code{void} & 函数不返回数据；不是一个可以装进变量的普通值类型。\\
+\code{[3 x i32]} & 连续存放的三个 i32。中间的 \code{x} 表示重复数量。\\
+\code{\{ i8, i32, i8 \}} & 三个字段组成的结构体类型，通常包含对齐填充。\\
+\code{\%Record} & 一个命名类型，如 \code{\%Record = type \{ i8, i32, i8 \}}。\\
+\bottomrule
+\end{tabularx}
+
+\projectnote{当前规划中，bool 的计算值是 \code{i1}，内存字节是 \code{i8}；数组、结构体和 Vec 的源值由稳定存储承载。这些是生成器的表示选择，不能理解为 LLVM 只允许这一种实现。}
+
+LLVM 的 \code{i32} 没有独立的“有符号类型”和“无符号类型”。同一组 32 位比特如何比较、相除或右移，由所选指令决定。源 TypeId 仍要保存在 lowering 层，供它选择正确的操作。
+
+\subsection{常量和全局数据}
+\begin{lstlisting}
+@answer = constant i32 42
+@counter = global i32 0
+@message = private constant [4 x i8] c"%d\0A\00"
+\end{lstlisting}
+\code{constant} 表示这份全局存储不可修改；\code{global} 表示可修改的全局存储。Rx 当前没有一般全局可变变量需求，第二行只是帮助理解语法。
+
+字符串写法 \code{c"..."} 按字节描述数组。LLVM 的 \code{\textbackslash 0A} 表示十六进制的换行字节，\code{\textbackslash 00} 是 C 字符串终止符；数组长度必须等于实际字节数。这里的 \code{\%d} 位于字符串内部，是 printf 的格式说明，和 SSA 名字无关。
+
+\code{@answer} 作为操作数时表示对象地址。要取得 42，应生成：
+\begin{lstlisting}
+%value = load i32, ptr @answer
+\end{lstlisting}
+常用直接常量还包括 \code{i32 42}、\code{i32 -1}、\code{i1 true}、\code{i1 false}、\code{ptr null}。其中 \code{null} 可以表示空指针，但不能被当作有效对象地址解引用。
+
+\subsection{opaque pointer：类型信息转移到了操作上}
+\begin{lstlisting}
+%p = alloca i32
+store i32 42, ptr %p
+%v = load i32, ptr %p
+\end{lstlisting}
+这三行里，\code{\%p} 的 LLVM 类型是 \code{ptr}。load 自己写出“读取 i32”，store 自己写出“写入 i32”。旧资料中可能看到 \code{i32*}；本讲义统一使用 LLVM 22 的 \code{ptr} 形式。
+
+指针不带元素类型，不代表所有读写都合法。如果 \code{\%p} 只指向一个字节，用它读取 i32 依然可能越界或未对齐。项目的 Place 和布局信息负责保留这些约束。
+
+\subsection{目标行如何阅读}
+\begin{lstlisting}[numbers=none]
+target datalayout = "e-m:e-p:32:32-i64:64-n32-S128"
+target triple = "riscv32-unknown-none-elf"
+\end{lstlisting}
+\begin{tabularx}{\linewidth}{@{}p{28mm}Y@{}}
+\toprule
+片段 & 本项目中的含义 \\
+\midrule
+\code{e} & 小端字节序。\\
+\code{m:e} & ELF 风格的符号改名规则。\\
+\code{p:32:32} & 默认地址空间的指针宽度 32 位、ABI 对齐 32 位。\\
+\code{i64:64} & i64 的 ABI 对齐为 64 位，即 8 字节；不是 32 位。\\
+\code{n32} & 目标的原生整数宽度集合包含 32 位。\\
+\code{S128} & 栈的自然对齐为 128 位，即 16 字节。\\
+\bottomrule
+\end{tabularx}
+\takeaway{datalayout 中这些宽度和对齐数字以比特为单位；指令中的 \code{align 4} 以字节为单位。不要把宿主 Mac 的 64 位指针布局复制到 RV32 模块。}
+\srcref{https://releases.llvm.org/22.1.0/docs/OpaquePointers.html}{LLVM 22：Opaque Pointers}
+
+\lesson{函数、参数、调用与返回}{sec:functions}
+\aim{写出一个有参数和返回值的函数，理解内部函数、外部声明、Unit 返回和调用签名。}
+
+\subsection{从 Rx 加法函数到 LLVM}
+\begin{lstlisting}[language=Rx,numbers=none]
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+\end{lstlisting}
+对应的 LLVM 函数与调用见 \code{examples/02\_add.ll}：
+\lstinputlisting[firstline=13]{examples/02_add.ll}
+
+定义中的 \code{i32 \%a} 声明一个 i32 参数；调用中的 \code{i32 20} 提供一个 i32 实参。\code{ret i32 \%sum} 必须与函数声明的 i32 返回类型相符。函数名与操作码都叫 \code{add} 是允许的：\code{@add} 是符号，指令中的裸 \code{add} 是关键字。
+
+\subsection{declare 和 define}
+\begin{lstlisting}
+declare i32 @read_number()
+
+define internal void @show(i32 %x) {
+entry:
+  call void @println_i32(i32 %x)
+  ret void
+}
+\end{lstlisting}
+这段是语法片段：若实际调用 \code{@read\_number}，还需要它的实现或外部支持；\code{@show} 所调用的打印函数也需要实现。仅有未使用的外部声明不要求函数立即存在。\code{internal} 表示函数只供当前模块使用；没有它的普通定义可用于导出入口。
+
+前向调用和互递归不要求按调用顺序排列函数体。生成器先登记所有函数签名，再生成各函数体即可；最终对源函数输出定义，对真正外部的函数输出声明。
+
+\subsection{返回 void 的调用}
+\begin{lstlisting}
+call void @println_i32(i32 42)
+ret void
+\end{lstlisting}
+\code{void} 调用没有可供使用的返回数据，所以不写 \code{\%r = call void ...}。在 Rx 中，\code{println\_i32(...)} 的结果是 \code{()}；在 LLVM 函数签名层面，用 \code{void} 表达无返回数据。
+
+\subsection{可变参数与外部边界}
+printf 的第一个固定参数是格式串指针；后面由格式串决定要读取哪些参数。打印 i32 时传 \code{i32}，打印 bool 前应先转换到 i32。单靠 LLVM 类型检查不能证明格式串与可变参数吻合，所以这些调用最好集中在生成器的 I/O 包装中。
+
+实际执行时，LLVM 后端会根据目标调用约定安排参数寄存器、栈和返回值。IR 阶段写出正确的签名、实参顺序和返回类型即可；自行安排 RISC-V 寄存器属于后续 Codegen 工作。
+
+\takeaway{函数调用既产生返回值，也可能产生副作用。不要因为返回值没被使用，就认为调用可以删除；也不要用同一个函数符号承载不一致的签名。}
+\checkq{源函数返回 i32，某条路径却写 \code{ret void}，是否只是“忽略结果”？答案：不是，它违反函数返回类型，必须修正这条路径。}
+\srcref{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl03.html}{官方教程第 3 章：表达式与函数生成}

@@ -1,0 +1,64 @@
+\documentclass[UTF8,11pt,a4paper,fontset=none]{ctexart}
+\input{preamble}
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+\thispagestyle{empty}
+{\sffamily\color{Teal}\large RX COMPILER \hfill STUDY NOTES / 01}
+\vspace{26mm}
+
+{\sffamily\bfseries\color{Ink}\fontsize{34}{43}\selectfont LLVM IR\par}
+\vspace{3mm}
+{\sffamily\bfseries\color{Ink}\fontsize{25}{34}\selectfont 语法与实践入门\par}
+\vspace{9mm}
+{\Large 面向 Rx 编译器的中文学习讲义\par}
+\vspace{5mm}
+{\color{Muted}从读懂一条指令，到写出可运行的模块。\\
+以 LLVM 22 的 \code{ptr} 语法为基准，目标为 RV32IM / ILP32。}
+\vspace{17mm}
+\begin{lstlisting}[numbers=none,basicstyle=\ttfamily\fontsize{11}{15}\selectfont]
+define i32 @add(i32 %a, i32 %b) {
+entry:
+  %sum = add i32 %a, %b
+  ret i32 %sum
+}
+\end{lstlisting}
+\vspace{9mm}
+\begin{tabularx}{\linewidth}{@{}>{\bfseries\color{Teal}}l Y@{}}
+适合谁 & 已完成 AST 与 semantic，准备实现 IR 生成的同学。\\
+学什么 & 类型、值、地址、指令、函数、基本块、控制流和聚合寻址。\\
+怎么学 & 每课先读示例，再改常量或控制流，最后运行并解释结果。\\
+配套材料 & 12 个完整 \code{.ll} 示例、预期输出、验证脚本与 LaTeX 源文件。\\
+\end{tabularx}
+\vfill
+{\color{Rule}\rule{\linewidth}{0.8pt}}
+{\small\sffamily\color{Muted}项目学习版 \hfill 2026 年 11 月 2 日}
+\end{titlepage}
+\pagenumbering{arabic}
+\hypersetup{pageanchor=true}
+\section*{如何使用这份讲义}
+\addcontentsline{toc}{section}{如何使用这份讲义}
+这份资料解释“LLVM IR 代码如何阅读和书写”。工程中的模块划分、Builder 接口和 verifier 设计，请结合项目的 \code{docs/ir.md} 阅读。这里的每个例子都是为学习重新编写的短程序，语言规则与本项目的表示选择会明确区分。
+
+\begin{itemize}
+ \item \textbf{第一遍：}第 1 至 4 课，完成打印、函数调用、变量读写。
+ \item \textbf{第二遍：}第 5 至 7 课，掌握运算、分支、短路和循环。
+ \item \textbf{第三遍：}第 8 至 10 课，处理数组、结构体、引用及项目中的聚合传递。
+ \item \textbf{动手验收：}第 11 课提供工具链；第 12 课给出练习和答案。附录可当指令速查表。
+\end{itemize}
+
+\projectnote{本项目第一版用栈槽保存源变量及分支结果。第 7 课的 \code{phi} 用于理解 SSA，是可选拓展；当前核心指令枚举尚未包含它。示例能够由 LLVM 接受，不等于当前学生编译器已实现对应特性。}
+
+\textbf{代码怎么找。}完整例子位于本目录的 \code{examples/}。讲义中只展示部分函数时会说明；语法模板和错误示例不能直接当成完整模块运行。每个完整示例都有独立的入口和打印支持，不需要借用项目参考 Rust 编译器。
+
+\textbf{验证状态。}配套脚本记录编译结果与精确输出，并明确区分本机模式和目标模式。本机运行时会在生成的副本中去掉 RV32 目标行；只有 Clang 22 交叉编译并在 REIMU 运行，才能称为项目目标链路通过。具体本次结果见同目录的 \code{build/validation-report.json}。
+
+\clearpage
+\tableofcontents
+\input{chapters/01-foundations}
+\input{chapters/02-memory-and-operations}
+\input{chapters/03-control-flow}
+\input{chapters/04-aggregates}
+\input{chapters/05-workflow-and-practice}
+\input{chapters/06-reference}
+\end{document}

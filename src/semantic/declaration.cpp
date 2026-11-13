@@ -88,31 +88,28 @@ TypeId Checker::resolveSegment(const PathSegment& segment, NodeId node, TypeId s
 TypeId Checker::resolveType(const Typenode& node, TypeId self) {
     auto found = result.resolved_types.find(node.id);
     if (found != result.resolved_types.end()) return found->second;
-    TypeId res = unknown;
-    switch (node.kind) {
-    case nodeKind::UnitType: res = unit; break;
-    case nodeKind::PathType: {
-        const auto& path = static_cast<const PathType&>(node).path;
-        if (path.size() != 1) fail(node.id, "a type path must name one supported type");
-        res = resolveSegment(path.front(), node.id, self);
-        break;
-    }
-    case nodeKind::RefType: {
-        const auto& ref = static_cast<const RefType&>(node);
-        res = result.types.reference(resolveType(*ref.inner, self), ref.mutability == Mutability::Mutable);
-        break;
-    }
-    case nodeKind::ArrayType: {
-        const auto& array = static_cast<const ArrayType&>(node);
-        auto element = resolveType(*array.element, self);
-        auto length = constExpr(*array.length, usize, self);
-        res = result.types.array(element, length.bits);
-        break;
-    }
-    default: throw logic_error("unexpected AST type node");
-    }
+    auto res = TypeVisitor::dispatch(node, self);
     result.resolved_types[node.id] = res;
     return res;
+}
+
+TypeId Checker::visit(const UnitType&, TypeId) {
+    return unit;
+}
+
+TypeId Checker::visit(const PathType& node, TypeId self) {
+    if (node.path.size() != 1) fail(node.id, "a type path must name one supported type");
+    return resolveSegment(node.path.front(), node.id, self);
+}
+
+TypeId Checker::visit(const RefType& node, TypeId self) {
+    return result.types.reference(resolveType(*node.inner, self), node.mutability == Mutability::Mutable);
+}
+
+TypeId Checker::visit(const ArrayType& node, TypeId self) {
+    auto element = resolveType(*node.element, self);
+    auto length = constExpr(*node.length, usize, self);
+    return result.types.array(element, length.bits);
 }
 
 optional<ResolvedName> Checker::lookupValue(const string& name) const {

@@ -1,0 +1,221 @@
+\lesson{数组与 getelementptr}{sec:gep}
+\aim{读懂 GEP 的每一个索引，能区分“算地址”和“读取元素”。}
+
+\subsection{数组是连续的元素存储}
+\begin{lstlisting}
+%items = alloca [3 x i32], align 4
+%item.1 = getelementptr [3 x i32], ptr %items, i32 0, i32 1
+store i32 42, ptr %item.1, align 4
+%answer = load i32, ptr %item.1, align 4
+\end{lstlisting}
+第一行分配整个数组，结果 \code{\%items} 是它的地址。第二行只计算索引为 1 的元素地址，第三行才写入 42，第四行才读回内容。
+
+\begin{center}
+\begin{tikzpicture}[font=\small]
+\node[anchor=east] at (-0.15,0.35) {索引};
+\node[anchor=east] at (-0.15,-0.4) {字节偏移};
+\foreach \x/\i/\off in {0/0/0,3/1/4,6/2/8} {
+  \draw[fill=Pale,draw=Rule] (\x,0) rectangle ++(3,0.7);
+  \node at (\x+1.5,0.35) {\code{i32} / \i};
+  \node[text=Teal] at (\x+1.5,-0.4) {\off};
+}
+\node[anchor=west,text=Muted] at (9.15,0.35) {总大小 12 字节};
+\end{tikzpicture}
+\end{center}
+
+\subsection{两个索引为什么是 0 和 1}
+把这一行拆开看：
+\begin{lstlisting}
+%item.1 = getelementptr [3 x i32], ptr %items, i32 0, i32 1
+\end{lstlisting}
+\begin{tabularx}{\linewidth}{@{}p{40mm}Y@{}}
+\toprule
+部分 & 意义 \\
+\midrule
+\code{[3 x i32]} & 基础元素的布局类型：从一个“完整数组”出发计算。\\
+\code{ptr \%items} & 基地址。\\
+第一个 \code{i32 0} & 在完整数组之间移动 0 份，仍然是当前这个数组。\\
+第二个 \code{i32 1} & 进入数组内部，选择索引为 1 的 i32 元素。\\
+结果 \code{\%item.1} & ptr 类型的元素地址，不是元素的 i32 值。\\
+\bottomrule
+\end{tabularx}
+在这个例子里，两个索引对应的地址偏移可理解为
+\[
+0 \times \operatorname{sizeof}([3 \times i32])
++ 1 \times \operatorname{sizeof}(i32)=4\text{ 字节}.
+\]
+第一个索引是指针层面的步进，不是一次 load，也不是 LLVM 自动补上的“解引用运算”。
+
+如果手里已经是连续 i32 数据的起始地址，写法更短：
+\begin{lstlisting}
+%element = getelementptr i32, ptr %data, i32 %index
+\end{lstlisting}
+这里基础类型是 i32，因此一个索引就按 4 字节步进。不要机械地给每一个 GEP 都添加 \code{0, index}；索引形状要由基础对象类型决定。
+
+\subsection{完整数组示例}
+\code{examples/07\_arrays.ll} 初始化三个元素，再用运行时计算的索引读取第二个：
+\lstinputlisting[firstline=13]{examples/07_arrays.ll}
+输出 42。把 \code{\%index = add i32 0, 1} 改为加 2，应该输出 30；这是检查索引选择是否正确的简单实验。
+
+\subsection{嵌套数组与运行时索引}
+对 \code{[2 x [3 x i32]]}，一条 GEP 可以逐层进入：
+\begin{lstlisting}
+%cell = getelementptr [2 x [3 x i32]], ptr %matrix,
+                     i32 0, i32 %row, i32 %column
+\end{lstlisting}
+这是一条分行展示的指令：先停留在当前矩阵，再选择行数组，最后选择行中的元素。数组索引允许是 SSA 值；结构体字段索引则有更严格的限制，见下一课。
+
+\textbf{GEP 不做边界检查。}合法指针运算和合法内存访问是两件事。算出一个地址不表示可以读取它。若源语言要求边界行为，应另外实现对应逻辑；当前项目按规范中有效输入的约束处理，不能把 GEP 当成自带检查的数组 API。
+
+\code{getelementptr inbounds} 还附带额外的指针运算约束，违反时可能产生 poison。初学及基础生成器可先不添加这个承诺。即使省略 inbounds，也不能因此合法地访问不存在的对象。
+
+\takeaway{GEP 回答“目标在哪里”，load 回答“目标存着什么”。索引的每一步由显式的布局类型解释，opaque ptr 不会替你保存这些信息。}
+\checkq{读取 \code{a[1]} 为什么常有 GEP 和 load 两步？答案：先从数组地址计算元素地址，再从该地址读值；只取 \code{\&a[1]} 时可以停在地址这一步。}
+\srcref{https://releases.llvm.org/22.1.0/docs/GetElementPtr.html}{LLVM 22：The Often Misunderstood GEP Instruction}
+
+\lesson{结构体、字段布局与聚合返回}{sec:structs}
+\aim{用字段序号寻址，理解填充字节，以及项目通过地址传递聚合值的方式。}
+
+\subsection{命名结构体与字段 GEP}
+\begin{lstlisting}
+%Record = type { i8, i32, i8 }
+
+; Inside a function:
+%record = alloca %Record, align 4
+%value.addr = getelementptr %Record, ptr %record, i32 0, i32 1
+store i32 42, ptr %value.addr, align 4
+\end{lstlisting}
+\code{\%Record} 出现在 type 定义处，是类型名字；\code{\%record} 是函数里的值名字。字段索引从 0 开始，因此 1 选中第二个字段 i32。
+
+LLVM 不认识源字段名字，例如 \code{record.value} 中的 value。semantic 已经确认了字段归属，lowering 应使用声明顺序中的字段号，而不是按字段名字排序。
+
+结构体的字段索引必须是常量 \code{i32}，不能用一个运行时 SSA 整数任意选择不同类型的字段。数组里的元素类型相同，所以可以使用运行时下标；结构体各字段的类型和偏移可能不同。
+
+\subsection{三个字段为什么占 12 字节}
+按本项目的 RV32 布局，\code{\{ i8, i32, i8 \}} 的布局为：
+
+\begin{tabularx}{\linewidth}{@{}p{24mm}p{30mm}p{33mm}Y@{}}
+\toprule
+区域 & 字节偏移 & 大小 & 原因 \\
+\midrule
+字段 0 & 0 & 1 字节 & i8 按 1 字节对齐。\\
+填充 & 1--3 & 3 字节 & 下一个 i32 需要按 4 字节对齐。\\
+字段 1 & 4 & 4 字节 & i32 占 4 字节。\\
+字段 2 & 8 & 1 字节 & 紧接前一个字段。\\
+尾部填充 & 9--11 & 3 字节 & 整体大小向最大字段对齐 4 取整。\\
+\bottomrule
+\end{tabularx}
+
+总大小是 12 字节，整体对齐是 4 字节。如果创建一个该结构体的数组，相邻元素的起始地址相差 12 字节，而不是字段大小之和 6。
+
+GEP 根据 datalayout 和结构体类型完成偏移计算，不要求把 4 或 8 手工写成字节偏移。项目自己的布局计算仍需与之保持一致，因为分配、表示复制和后续自写后端也会依赖这些数字。
+
+LLVM 还有写成 \code{<\{ i8, i32, i8 \}>} 的 packed 结构体，它改变布局规则；本项目的普通结构体不应为了“省空间”随意改用这种形式。
+
+\subsection{bool 字段的完整例子}
+\code{examples/08\_structs.ll} 的主体如下，输出 42 和 1：
+\lstinputlisting[firstline=13]{examples/08_structs.ll}
+读取 bool 字段时先 load i8，再 trunc 到 i1；打印前再 zext 到 i32。三种位宽在不同边界上各有用途，不能因为最终打印的是整数就跳过表示约定。
+
+\subsection{聚合地址不自动等于独立的值}
+LLVM 本身允许数组或结构体作为某些指令、参数和返回的值。本项目选择另一套便于实现的内部约定：数组、结构体和 Vec 的值由稳定存储承载，ABI 中传递其地址。
+
+这里要区分两个指针：
+\begin{itemize}
+ \item 指向源可变对象的地址：对象后续可能被修改。
+ \item 指向本次求值快照的地址：内容在这次值使用期间必须保持稳定。
+\end{itemize}
+两者的 LLVM 类型都是 ptr，但不能因为类型相同就互换。源函数按值接收数组时，不能意外变成对调用者数组的可变别名。
+
+\subsection{通过隐藏输出地址返回数组}
+配套文件 \code{examples/11\_aggregate\_return.ll} 用下面的形状返回两个整数：
+\lstinputlisting[firstline=13]{examples/11_aggregate_return.ll}
+
+可以按三步读这个例子：
+\begin{enumerate}
+ \item 调用者分配 \code{[2 x i32]} 的结果存储。
+ \item 把地址作为额外参数传给 \code{@make\_pair}。
+ \item 被调方往该地址写入 20 和 22，以 \code{ret void} 结束；调用者读取并相加，得到 42。
+\end{enumerate}
+这个输出参数是双方约定的普通 ptr。仅仅把它放在参数列表第一位，就能实现本例，不必先学习或随意添加 LLVM 的 \code{sret} 属性。
+
+\projectnote{当前项目约定聚合返回使用隐藏的首个输出地址；聚合参数传入值快照地址，被调方复制到自己的参数槽。复制对象表示不等于显式 Clone：Box、Vec 的深复制有不同的源语义，不能混用。}
+\takeaway{LLVM 类型负责说明机器对象的形状；lowering 还必须保证源程序要求的独立值、求值顺序和存储生命周期。只检查 ptr 类型一致远远不够。}
+
+\lesson{把语法接到当前 Rx 编译器}{sec:project}
+\aim{从现有 semantic 结果选择指令，建立正确的值、位置和函数边界，而不是重新做语义分析。}
+
+\subsection{先把源概念对应到 IR}
+\begin{tabularx}{\linewidth}{@{}p{31mm}p{45mm}Y@{}}
+\toprule
+源概念 & 常见 IR 表示 & lowering 仍需知道什么 \\
+\midrule
+四种整数 & i32 & 有符号性、运算规则。\\
+bool & 计算 i1，存储 i8 & 在 load/store 边界转换。\\
+引用、Box & 标量 ptr & 指向的源类型及具体操作。\\
+数组、结构体 & 指向稳定存储的 ptr & 对象布局、复制和字段顺序。\\
+Vec & 指向三字段对象的 ptr & 元素类型、长度、容量与数据区。\\
+Unit & 正常结果，无数据 & 能继续生成后续指令。\\
+never / NoReturn & 无正常结果 & 停止沿当前路径生成。\\
+\bottomrule
+\end{tabularx}
+
+TypeId 的身份不能混用。semantic 的 TypeId 区分源类型；核心 IR 的 TypeId 描述 LLVM 层的类型。源 i32 与 u32 可以对应同一个 IR i32，但 sdiv/udiv 的选择仍须来自源类型。
+
+\subsection{Place、读取与取地址}
+考虑三个很相似的源表达式：
+\begin{lstlisting}[language=Rx,numbers=none]
+x
+&x
+*r
+\end{lstlisting}
+当 x 处在需要值的位置，生成器从 x 的槽读取；\code{\&x} 取得槽地址；\code{*r} 先取得引用的 ptr，再根据本次使用场景决定是保留目标位置，还是读取目标内容。
+
+semantic 的 Place 是已经检查过的求址计划；IR lowering 的 Place 则含运行时地址及存储信息。将字段投影翻译成 GEP，将读取翻译成 load，将写入翻译成 store，就把前端计划连接到了具体指令。
+
+\subsection{普通指令也可能组合出错误的源行为}
+赋值不仅是“最后生成一条 store”。当前 Rx 项目要求普通赋值和复合赋值先求右侧，再求左侧目标地址；复合赋值随后读取目标旧值、计算并写回。地址表达式只能按要求求值一次。
+
+同样，调用实参按源顺序求值，并立即保存需要的快照。如果第一个实参是数组值，后一个实参会修改这个数组，不能拖到所有实参求完后才复制第一个参数。
+
+二元运算的引用操作数还涉及“何时读取所指目标”。这类规则应以 \code{docs/ir.md} 的求值顺序约定为准，不能只根据 LLVM 的操作数列表猜测。先写出预期副作用顺序，再决定每次 load 放在哪个位置。
+
+\subsection{Vec：先取字段，再访问数据}
+当前项目把 Vec 的存储布局表示成：
+\begin{lstlisting}
+%VecI32 = type { ptr, i32, i32 }
+\end{lstlisting}
+字段依次为 data、len、cap。在 RV32 中三个字段均占 4 字节，因此整个对象为 12 字节、按 4 字节对齐。本机 64 位平台不能据此照抄这个数字。
+
+在已确认下标有效的前提下，元素寻址片段为：
+\begin{lstlisting}
+%data.addr = getelementptr %VecI32, ptr %vec, i32 0, i32 0
+%data = load ptr, ptr %data.addr
+%element.addr = getelementptr i32, ptr %data, i32 %index
+%element = load i32, ptr %element.addr
+\end{lstlisting}
+第一个 GEP 只找到“保存 data 指针的字段”。必须 load 出真正的数据区地址后，才能对元素做下一次 GEP。GEP 不会自动穿过一个存储在字段里的指针。
+
+Box 的分配、Vec 扩容和 Clone 最终也会由调用、寻址、读写与循环组合而成。学习语法时先掌握这些基础，运行时 helper 的完整实现仍按项目规划推进。
+
+\projectnote{不能用 \code{icmp eq ptr} 自动实现所有源 equality。LLVM 的这种比较检查指针值；当前项目中引用、Box 的相等操作要比较所指内容，Vec 要比较长度及有效元素，结构体不能把 padding 也拿来整体比较。操作选择必须来自源类型语义。}
+
+\subsection{从例子映射到 Builder}
+目前 \code{include/ir/ir.hpp} 中的 Builder 接口，已经能与本讲义的基础语法对应：
+
+\begin{tabularx}{\linewidth}{@{}p{43mm}Y@{}}
+\toprule
+接口概念 & 最终文本 \\
+\midrule
+\code{slot / load / store} & alloca、load、store。\\
+\code{gep} & 带基础存储类型和索引列表的 getelementptr。\\
+\code{binary / compare} & 算术或位运算、带谓词的 icmp。\\
+\code{convert} & zext 或 trunc 等转换。\\
+\code{call} & 与函数签名匹配的 call。\\
+\code{jump / branch / ret} & 无条件 br、条件 br、ret。\\
+\bottomrule
+\end{tabularx}
+
+先创建结构化 Module、Function、Block 和指令，再验证并打印 \code{.ll}。printer 只负责把已有信息写成正确语法，不应重新查 AST 决定类型，也不应通过补默认返回掩盖缺失的控制流。
+
+\textbf{第一个接入目标。}对源 \code{fn main() \{ println\_i32(42); \}}，从已解析的调用目标识别内建打印，生成第 1 课的内部源函数与机器入口。等这个链路能输出 42，再逐步增加本讲义后面的指令组合。这里给出接入思路；配套示例由手写 IR 构成，并不代表项目 CLI 已完成这些功能。

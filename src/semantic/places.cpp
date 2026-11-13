@@ -49,7 +49,7 @@ void Checker::requireMutable(const ExprInfo& info, NodeId node) {
     return ;
 }
 
-ExprInfo Checker::field(const FieldExpr& node) {
+ExprInfo Checker::visit(const FieldExpr& node, TypeId) {
     auto base = expression(*node.base);
     while (canDereference(base.type)) base = dereference(move(base), node.base->id);// 语法糖。
     const auto type = result.types[base.type];
@@ -66,7 +66,7 @@ ExprInfo Checker::field(const FieldExpr& node) {
     return res;
 }
 
-ExprInfo Checker::index(const IndexExpr& node) {
+ExprInfo Checker::visit(const IndexExpr& node, TypeId) {
     auto base = expression(*node.base);
     while (canDereference(base.type)) base = dereference(move(base), node.base->id);// 语法糖。
     const auto type = result.types[base.type];

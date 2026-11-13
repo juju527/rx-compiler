@@ -99,7 +99,7 @@ vector<CallableInfo> Checker::methods(TypeId receiver, const string& name) {
     return res;
 }
 
-ExprInfo Checker::call(const CallExpr& node) {
+ExprInfo Checker::visit(const CallExpr& node, TypeId) {
     auto callee = expression(*node.callee);
     if (callee.category != Category::Callable || !callee.callable)
         fail(node.callee->id, "this expression is not callable (a local may shadow a function)");
@@ -116,7 +116,7 @@ ExprInfo Checker::call(const CallExpr& node) {
     return res;
 }
 
-ExprInfo Checker::methodCall(const MethodCallExpr& node) {
+ExprInfo Checker::visit(const MethodCallExpr& node, TypeId) {
     if (!node.method.args.empty()) fail(node.id, "method segments do not accept concrete type arguments");
     auto receiver = expression(*node.receiver);
     auto base = receiver;

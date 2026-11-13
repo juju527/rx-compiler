@@ -1,0 +1,50 @@
+{
+  "01_print42": {
+    "source": "01_print42.ll",
+    "expected": "01_print42.out"
+  },
+  "02_add": {
+    "source": "02_add.ll",
+    "expected": "02_add.out"
+  },
+  "03_variables": {
+    "source": "03_variables.ll",
+    "expected": "03_variables.out"
+  },
+  "04_if_slots": {
+    "source": "04_if_slots.ll",
+    "expected": "04_if_slots.out"
+  },
+  "05_short_circuit": {
+    "source": "05_short_circuit.ll",
+    "expected": "05_short_circuit.out"
+  },
+  "06_loop": {
+    "source": "06_loop.ll",
+    "expected": "06_loop.out"
+  },
+  "07_arrays": {
+    "source": "07_arrays.ll",
+    "expected": "07_arrays.out"
+  },
+  "08_structs": {
+    "source": "08_structs.ll",
+    "expected": "08_structs.out"
+  },
+  "09_phi": {
+    "source": "09_phi.ll",
+    "expected": "09_phi.out"
+  },
+  "10_references": {
+    "source": "10_references.ll",
+    "expected": "10_references.out"
+  },
+  "11_aggregate_return": {
+    "source": "11_aggregate_return.ll",
+    "expected": "11_aggregate_return.out"
+  },
+  "12_scalar_rules": {
+    "source": "12_scalar_rules.ll",
+    "expected": "12_scalar_rules.out"
+  }
+}

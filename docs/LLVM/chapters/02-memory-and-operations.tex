@@ -1,0 +1,158 @@
+\lesson{SSA 值、地址与可变变量}{sec:memory}
+\aim{用 alloca、load、store 实现变量更新，并能指出一段代码里的每一个 ptr 指向什么。}
+
+\subsection{三个名字，三种不同含义}
+\begin{lstlisting}
+%x.addr = alloca i32, align 4
+store i32 40, ptr %x.addr, align 4
+%old = load i32, ptr %x.addr, align 4
+%new = add i32 %old, 2
+store i32 %new, ptr %x.addr, align 4
+\end{lstlisting}
+\begin{center}
+\begin{tikzpicture}[node distance=14mm]
+\node[flowbox,text width=32mm] (p) {\code{\%x.addr}\\地址值};
+\node[flowbox,text width=35mm,right=of p] (mem) {i32 存储槽\\40 改为 42};
+\node[flowbox,text width=30mm,right=of mem] (v) {\code{\%old = 40}\\\code{\%new = 42}};
+\draw[flowarrow] (p)--node[above,font=\small]{指向}(mem);
+\draw[flowarrow] (mem)--node[above,font=\small]{load}(v);
+\end{tikzpicture}
+\end{center}
+
+\code{\%x.addr} 一直是同一个地址值。\code{\%old} 一直代表那次 load 取得的 40。\code{\%new} 代表加法结果 42。改变的是地址指向的内存内容，而不是这些 SSA 名字已有的定义。
+
+\textbf{SSA（静态单赋值）}要求一个局部结果名在函数中只有一个定义。下面是刻意写错的片段：
+\begin{lstlisting}
+; INVALID: the same SSA name is defined twice.
+%x = add i32 1, 2
+%x = add i32 %x, 3
+\end{lstlisting}
+可改成两个名字，也可通过内存表示源变量：
+\begin{lstlisting}
+%x1 = add i32 1, 2
+%x2 = add i32 %x1, 3
+\end{lstlisting}
+
+\subsection{三条内存指令的模板}
+\begin{tabularx}{\linewidth}{@{}p{24mm}Y@{}}
+\toprule
+指令 & 形状与含义 \\
+\midrule
+alloca & \code{\%p = alloca i32, align 4}：为一个 i32 申请当前调用中的栈存储，结果是 ptr。\\
+load & \code{\%v = load i32, ptr \%p, align 4}：从地址读出 i32 值。\\
+store & \code{store i32 \%v, ptr \%p, align 4}：把 i32 值写入地址；没有结果值。\\
+\bottomrule
+\end{tabularx}
+
+\code{alloca} 本身不初始化对象。第一次 load 前必须有适当的写入，且所有可能到达该 load 的执行路径都要满足这一点。LLVM 能解析一个 load，不代表它已经证明该地址保存着正确值。
+
+\code{align 4} 声明此次访问满足至少 4 字节对齐。不要随意把这个数字写大。向一个只保证字节对齐的地址读写 i32 时，必须先明确实际存储和对齐约定。
+
+\projectnote{当前设计把固定 alloca 集中到函数入口的前序区，初始化仍放在真实执行位置。循环回边跳回单独的测试块或循环体，不重复执行入口的 alloca。}
+
+\subsection{可变变量的完整函数}
+对应源行为是：令 x 为 40，将 x 加 2，再打印 x。文件 \code{examples/03\_variables.ll} 的主体如下：
+\lstinputlisting[firstline=13]{examples/03_variables.ll}
+\checkq{最后一次 store 会让 \code{\%old} 变成 42 吗？答案：不会。后续若想读到新内容，需要新的 load。}
+
+\subsection{引用：地址值与保存地址的槽}
+令 x 初始为 40，通过 \code{let r = \&mut x;} 取得引用，再执行 \code{*r += 2} 并打印 x。对应完整示例 \code{examples/10\_references.ll}：
+\lstinputlisting[firstline=13]{examples/10_references.ll}
+
+逐层看：
+\begin{enumerate}
+ \item \code{\%x.addr} 指向存放整数的槽。
+ \item \code{\%r.addr} 指向存放一个指针值的槽，分配类型为 \code{ptr}。
+ \item \code{\%r = load ptr, ptr \%r.addr} 取出指针，结果指向 x。
+ \item \code{load i32, ptr \%r} 才读取 x 的整数内容。
+\end{enumerate}
+虽然两个地址的 LLVM 类型都是 ptr，但它们指向的对象不同。不要因为“都是指针”就少做或多做一次 load。
+
+\takeaway{判断一行代码时，问两件事：操作数现在是地址还是内容？本条指令将产生地址还是内容？这个问题比记忆某个变量名更可靠。}
+\srcref{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl07.html}{官方教程第 7 章：可变变量与内存}
+
+\lesson{算术、比较、位运算与转换}{sec:operations}
+\aim{根据源整数的有符号性选指令，正确处理 bool、移位和 Rx 的 32 位语义。}
+
+\subsection{二元运算的共同形状}
+\begin{lstlisting}
+%sum = add i32 %a, %b
+%product = mul i32 %sum, 2
+\end{lstlisting}
+普通二元运算通常写成“结果名 = 操作码 类型 左操作数, 右操作数”。这一行只写一次 \code{i32}，两个操作数都必须匹配它。
+
+\begin{tabularx}{\linewidth}{@{}p{30mm}p{45mm}Y@{}}
+\toprule
+源操作 & LLVM 指令 & 注意点 \\
+\midrule
+加、减、乘 & \code{add / sub / mul} & 对 i32 产生 32 位结果。\\
+有符号除法、余数 & \code{sdiv / srem} & 除法向零截断。\\
+无符号除法、余数 & \code{udiv / urem} & 按无符号位模式解释。\\
+按位与、或、异或 & \code{and / or / xor} & bool 的非短路运算也能使用。\\
+左移 & \code{shl} & 先按 Rx 规则处理移位计数。\\
+有符号右移 & \code{ashr} & 高位补符号位。\\
+无符号右移 & \code{lshr} & 高位补零。\\
+\bottomrule
+\end{tabularx}
+
+没有专门的普通整数“取负”操作码，写 \code{sub i32 0, \%x} 即可。整数按位取反可与全 1 异或；bool 逻辑取反可写：
+\begin{lstlisting}
+%not.value = xor i32 %x, -1
+%not.flag = xor i1 %flag, true
+\end{lstlisting}
+
+\subsection{icmp 的结果总是条件值}
+\begin{lstlisting}
+%same = icmp eq i32 %a, %b
+%less.signed = icmp slt i32 %a, %b
+%less.unsigned = icmp ult i32 %a, %b
+\end{lstlisting}
+上面三条结果都是 i1。谓词 \code{eq}、\code{ne} 表示相等、不等；\code{slt}、\code{sle}、\code{sgt}、\code{sge} 表示有符号顺序；\code{ult}、\code{ule}、\code{ugt}、\code{uge} 表示无符号顺序。
+
+例如，位模式全 1 可以作为有符号的 -1，也可以作为无符号的 4294967295。因此 \code{icmp slt i32 -1, 1} 得到 true，\code{icmp ult i32 -1, 1} 得到 false。结果差异来自谓词，而不是 \code{i32} 类型名字。
+
+\subsection{bool 与整数之间的转换}
+\begin{lstlisting}
+%as.int = zext i1 %flag to i32
+%as.byte = zext i1 %flag to i8
+store i8 %as.byte, ptr %flag.addr
+%stored.byte = load i8, ptr %flag.addr
+%loaded.flag = trunc i8 %stored.byte to i1
+\end{lstlisting}
+\code{zext} 扩展位宽并在高位补零；\code{trunc} 保留低位并缩小位宽。项目约定 bool 的内存字节只为 0 或 1，因此将这个字节截到 i1 可恢复条件值。
+
+\textbf{拓展：}\code{sext} 是符号扩展。把 i1 的 true 符号扩展成 i32 会得到全 1，也就是 -1；所以 Rx 的 \code{true as i32} 应使用 zext，结果为 1。当前项目的核心转换指令先实现 zext/trunc 即可。
+
+Rx 的 i32、u32、isize、usize 都是 32 位。它们之间的 \code{as} 保留位模式，通常不用发出额外的 LLVM 转换指令；生成器仍需更新源类型身份，以影响后续比较、除法和右移。
+
+\subsection{移位计数必须屏蔽}
+\begin{lstlisting}
+%count = and i32 %raw.count, 31
+%left = shl i32 %x, %count
+%right.signed = ashr i32 %x, %count
+%right.unsigned = lshr i32 %x, %count
+\end{lstlisting}
+Rx 要求移位计数只使用最低 5 位，因而 33 等价于 1。LLVM 的移位操作不会自动替你履行这个源语言约定；直接将 32 或更大计数用于 i32 移位会产生 poison。普通表达式和复合赋值都要保持同样的处理。
+
+\subsection{属性是承诺，不是装饰}
+\begin{lstlisting}
+%wrapped = add i32 %a, %b
+; Only use this form when signed overflow is proved impossible:
+%promised = add nsw i32 %a, %b
+\end{lstlisting}
+Rx 的普通 32 位加、减、乘和有符号取负按位回绕。基础生成器应使用第一种形式。\code{nsw} 声称没有有符号溢出，\code{nuw} 声称没有无符号溢出；承诺被违反时，LLVM 的含义会改变。不要从其他语言的 Clang 输出中直接复制这些标志。
+
+类似地，第一版无需主动附加 \code{exact}、GEP 的 \code{inbounds} 或引用参数的 \code{noalias}。只有证明满足相应前提，才考虑使用它们。
+
+\takeaway{源语言规则决定选哪条指令、是否需要额外指令。LLVM 能接受 \code{shl} 或 \code{add nsw}，不代表它们自动实现了 Rx 所需的行为。}
+
+\code{examples/12\_scalar\_rules.ll} 把本课的差异串起来，预期输出为：
+\begin{lstlisting}[language={},numbers=none]
+0
+1
+0
+-4
+2147483644
+\end{lstlisting}
+五行分别来自回绕加法、两种比较、两种右移。你可以先手算，再运行核对。
+\srcref{https://github.com/ACMClassCourse-2025/rx-compiler-specification/blob/master/src/expressions/operator-expr.md}{Rx 规范：运算与转换}

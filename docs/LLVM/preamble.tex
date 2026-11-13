@@ -1,0 +1,105 @@
+\usepackage[left=21mm,right=21mm,top=22mm,bottom=23mm,headheight=15pt]{geometry}
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Arial}
+\setmonofont{Menlo}[Scale=0.90]
+\setCJKmainfont{Songti SC}
+\setCJKsansfont{Heiti SC}
+\setCJKmonofont{Heiti SC}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor,graphicx}
+\usepackage{booktabs,array,tabularx,longtable}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{fancyhdr}
+\usepackage{needspace}
+\usepackage{hyperref}
+\definecolor{Ink}{HTML}{172C44}
+\definecolor{Teal}{HTML}{087F8C}
+\definecolor{Muted}{HTML}{5B6C7B}
+\definecolor{Pale}{HTML}{F2F6F9}
+\definecolor{Rule}{HTML}{CCD9E3}
+\definecolor{Rust}{HTML}{B45831}
+\definecolor{CodeGreen}{HTML}{376D48}
+\hypersetup{
+  colorlinks=true,linkcolor=Teal,urlcolor=Teal,citecolor=Teal,
+  pdftitle={LLVM IR 语法与实践入门：面向 Rx 编译器},
+  pdfauthor={Rx Compiler 学习资料},
+  pdfsubject={LLVM 22、RV32IM、LLVM IR 语法、项目实践}
+}
+\urlstyle{same}
+\ctexset{
+  section={format=\Large\sffamily\bfseries\color{Ink},beforeskip=18pt,afterskip=10pt},
+  subsection={format=\large\sffamily\bfseries\color{Ink},beforeskip=13pt,afterskip=7pt},
+  subsubsection={format=\normalsize\sffamily\bfseries\color{Teal},beforeskip=10pt,afterskip=5pt}
+}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\linespread{1.13}
+\clubpenalty=10000
+\widowpenalty=10000
+\setlist[itemize]{leftmargin=1.6em,itemsep=3pt,topsep=4pt}
+\setlist[enumerate]{leftmargin=1.8em,itemsep=3pt,topsep=4pt}
+\setlength{\emergencystretch}{2em}
+\renewcommand{\arraystretch}{1.20}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\lesson}[2]{\clearpage\section{#1}\label{#2}}
+\newcommand{\aim}[1]{\noindent{\color{Teal}\sffamily\bfseries 本课目标}\quad #1\par\medskip}
+\newcommand{\takeaway}[1]{\par\medskip\noindent\colorbox{Pale}{\parbox{\dimexpr\linewidth-2\fboxsep\relax}{\small\textbf{\color{Teal}记住这一点}\quad #1}}\par\medskip}
+\newcommand{\projectnote}[1]{\par\smallskip{\small\textbf{\color{Rust}项目约定}\quad #1}\par\smallskip}
+\newcommand{\checkq}[1]{\par\smallskip{\small\textbf{\color{Teal}自测}\quad #1}\par\smallskip}
+\newcommand{\srcref}[2]{\par{\footnotesize\color{Muted}进一步核对：\href{#1}{#2}。}\par}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily\color{Muted}Rx Compiler / LLVM IR}
+\fancyhead[R]{\small\sffamily\color{Muted}语法与实践入门}
+\fancyfoot[L]{\footnotesize\sffamily\color{Muted}LLVM 22 \quad RV32IM / ILP32}
+\fancyfoot[R]{\small\sffamily\color{Ink}\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\renewcommand{\footrulewidth}{0pt}
+\lstdefinelanguage{LLVM}{
+ morekeywords={target,datalayout,triple,source_filename,private,internal,constant,global,declare,define,
+ ret,call,alloca,load,store,getelementptr,add,sub,mul,sdiv,udiv,srem,urem,
+ and,or,xor,shl,ashr,lshr,icmp,eq,ne,slt,sle,sgt,sge,ult,ule,ugt,uge,
+ zext,sext,trunc,br,label,phi,select,unreachable,align,to,inbounds,nsw,nuw,exact},
+ morekeywords=[2]{void,i1,i8,i32,i64,ptr,true,false,null},
+ sensitive=true,morecomment=[l]{;},morestring=[b]"
+}
+\lstdefinelanguage{Rx}{
+ morekeywords={fn,let,mut,if,else,while,loop,break,continue,return,struct,impl,const,as,true,false},
+ morekeywords=[2]{i32,u32,isize,usize,bool,Box,Vec},
+ sensitive=true,morecomment=[l]{//},morestring=[b]"
+}
+\lstset{
+ language=LLVM,
+ basicstyle=\ttfamily\fontsize{9}{11.4}\selectfont,
+ keywordstyle=\bfseries\color{Ink},
+ keywordstyle=[2]\color{Teal},
+ commentstyle=\itshape\color{Muted},
+ stringstyle=\color{CodeGreen},
+ numbers=left,numberstyle=\ttfamily\fontsize{7}{9}\selectfont\color{Muted},
+ numbersep=8pt,xleftmargin=16pt,framexleftmargin=4pt,
+ frame=tb,framerule=0.35pt,rulecolor=\color{Rule},
+ backgroundcolor=\color{Pale},
+ aboveskip=8pt,belowskip=8pt,
+ breaklines=true,breakatwhitespace=false,
+ columns=fullflexible,keepspaces=true,
+ showstringspaces=false,tabsize=2,
+ captionpos=b
+}
+\AddToHook{env/lstlisting/before}{\par\noindent\begin{minipage}{\linewidth}}
+\AddToHook{env/lstlisting/after}{\end{minipage}\par}
+\let\originalinputlisting\lstinputlisting
+\renewcommand{\lstinputlisting}[2][]{%
+  \par\noindent\begin{minipage}{\linewidth}%
+  \originalinputlisting[#1]{#2}%
+  \end{minipage}\par}
+\tikzset{
+ flowbox/.style={draw=Rule,fill=Pale,rounded corners=2pt,minimum height=9mm,
+   text width=28mm,align=center,font=\small\sffamily},
+ flowarrow/.style={-{Latex[length=2mm]},thick,color=Teal}
+}
+\setcounter{tocdepth}{1}

@@ -16,7 +16,7 @@ TypeId Checker::scalarOperand(const ExprInfo& info, NodeId node) const {
     return type;
 }
 
-ExprInfo Checker::unary(const UnaryExpr& node) {
+ExprInfo Checker::visit(const UnaryExpr& node, TypeId) {
     ExprInfo operand;
     optional<Constant> constant_value;
     if (node.op == UnaryOp::Negate && node.operand->kind == nodeKind::IntLiteral) {
@@ -78,7 +78,7 @@ OperatorInfo Checker::checkBinaryOperands(BinaryOp op, const ExprInfo& left, con
     return {l, result.types[left.type].kind == TypeKind::Reference, result.types[right.type].kind == TypeKind::Reference};
 }
 
-ExprInfo Checker::binary(const BinaryExpr& node) {
+ExprInfo Checker::visit(const BinaryExpr& node, TypeId) {
     auto left = expression(*node.left), right = expression(*node.right);
     const auto operation = checkBinaryOperands(node.op, left, right, node.id);
     const bool equality = node.op == BinaryOp::Equal || node.op == BinaryOp::NotEqual;
@@ -107,7 +107,7 @@ ExprInfo Checker::binary(const BinaryExpr& node) {
     return res;
 }
 
-ExprInfo Checker::assignment(const AssignExpr& node) {
+ExprInfo Checker::visit(const AssignExpr& node, TypeId) {
     auto target = expression(*node.target);
     requireMutable(target, node.target->id);
     result.expressions.at(node.target->id).use = UseInfo{target.type, UseMode::InspectPlace, {}};
@@ -138,7 +138,7 @@ ExprInfo Checker::assignment(const AssignExpr& node) {
     return res;
 }
 
-ExprInfo Checker::cast(const CastExpr& node) {
+ExprInfo Checker::visit(const CastExpr& node, TypeId) {
     auto operand = consume(*node.value);
     auto target = resolveType(*node.target_type, self_type);
     if (!Types::integer(target) || !Types::scalar(operand.type)) fail(node.id, "as supports only integer-to-integer and bool-to-integer conversions");

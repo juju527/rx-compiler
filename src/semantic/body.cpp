@@ -1,7 +1,6 @@
 #include "checker.hpp"
 
 using std::move;
-using std::logic_error;
 
 namespace rx::semantic {
 
@@ -46,119 +45,107 @@ void Checker::functionBody(NodeId id) {
 }
 
 ExprInfo Checker::expression(const Exprnode& node, TypeId expected) {
-    auto res = resolveExpression(node, expected);
+    auto res = ExpressionVisitor::dispatch(node, expected);
     res.use.reset();
     result.expressions[node.id] = res;
     return res;
 }
 
-ExprInfo Checker::resolveExpression(const Exprnode& node, TypeId expected) {
-    switch (node.kind) {
-    case nodeKind::IntLiteral: {
-        auto c = integerLiteral(static_cast<const IntLiteral&>(node), expected);
-        auto res = value(c.type);
-        res.constant_value = c;
-        return res;
-    }
-    case nodeKind::BoolLiteral: return value(boolean);
-    case nodeKind::UnitExpr: return value(unit);
-    case nodeKind::PathExpr: {
-        const auto& path = static_cast<const PathExpr&>(node).path;
-        if (path.size() == 2) {
-            if (!path.back().args.empty()) fail(node.id, "associated values do not accept type arguments");
-            auto owner = resolveSegment(path.front(), node.id, self_type);
-            if (auto target = associated(owner, path.back().name)) {
-                ExprInfo res;
-                res.category = Category::Callable;
-                res.callable = *target;
-                res.resolved_name = target->function ? ResolvedName{NameKind::Function, target->function} : ResolvedName{NameKind::Builtin, static_cast<size_t>(target->builtin)};
-                return res;
-            }
-        }
-        auto symbol = resolveName(path, node.id, self_type);
-        ExprInfo res;
-        res.resolved_name = symbol;
-        if (symbol.kind == NameKind::Local) {
-            const auto& binding = result.locals.at(symbol.id);
-            res.type = binding.type;
-            res.category = Category::Place;
-            res.place.root = symbol.id;
-            res.place.writable = binding.mutable_binding;
+ExprInfo Checker::visit(const IntLiteral& node, TypeId expected) {
+    auto c = integerLiteral(node, expected);
+    auto res = value(c.type);
+    res.constant_value = c;
+    return res;
+}
+
+ExprInfo Checker::visit(const BoolLiteral&, TypeId) {
+    return value(boolean);
+}
+
+ExprInfo Checker::visit(const UnitExpr&, TypeId) {
+    return value(unit);
+}
+
+ExprInfo Checker::visit(const PathExpr& node, TypeId) {
+    const auto& path = node.path;
+    if (path.size() == 2) {
+        if (!path.back().args.empty()) fail(node.id, "associated values do not accept type arguments");
+        auto owner = resolveSegment(path.front(), node.id, self_type);
+        if (auto target = associated(owner, path.back().name)) {
+            ExprInfo res;
+            res.category = Category::Callable;
+            res.callable = *target;
+            res.resolved_name = target->function ? ResolvedName{NameKind::Function, target->function} : ResolvedName{NameKind::Builtin, static_cast<size_t>(target->builtin)};
             return res;
         }
-        if (symbol.kind == NameKind::Constant) {
-            res.constant_value = result.constants.at(symbol.id);
-            res.type = res.constant_value->type;
-            return res;
-        }
-        res.category = Category::Callable;
-        res.callable = callable(symbol, node.id);
+    }
+    auto symbol = resolveName(path, node.id, self_type);
+    ExprInfo res;
+    res.resolved_name = symbol;
+    if (symbol.kind == NameKind::Local) {
+        const auto& binding = result.locals.at(symbol.id);
+        res.type = binding.type;
+        res.category = Category::Place;
+        res.place.root = symbol.id;
+        res.place.writable = binding.mutable_binding;
         return res;
     }
-    case nodeKind::UnaryExpr: return unary(static_cast<const UnaryExpr&>(node));
-    case nodeKind::BinaryExpr: return binary(static_cast<const BinaryExpr&>(node));
-    case nodeKind::AssignExpr: return assignment(static_cast<const AssignExpr&>(node));
-    case nodeKind::CastExpr: return cast(static_cast<const CastExpr&>(node));
-    case nodeKind::CallExpr: return call(static_cast<const CallExpr&>(node));
-    case nodeKind::MethodCallExpr: return methodCall(static_cast<const MethodCallExpr&>(node));
-    case nodeKind::FieldExpr: return field(static_cast<const FieldExpr&>(node));
-    case nodeKind::IndexExpr: return index(static_cast<const IndexExpr&>(node));
-    case nodeKind::ArrayExpr: return array(static_cast<const ArrayExpr&>(node), expected);
-    case nodeKind::ArrayRepeatExpr: return repeat(static_cast<const ArrayRepeatExpr&>(node), expected);
-    case nodeKind::StructExpr: return structure(static_cast<const StructExpr&>(node));
-    case nodeKind::BlockExpr: return block(static_cast<const BlockExpr&>(node), expected);
-    case nodeKind::IfExpr: return conditional(static_cast<const IfExpr&>(node), expected);
-    case nodeKind::LoopExpr: return loop(static_cast<const LoopExpr&>(node), expected);
-    case nodeKind::WhileExpr: return whileLoop(static_cast<const WhileExpr&>(node));
-    case nodeKind::BreakExpr: return breakExpr(static_cast<const BreakExpr&>(node));
-    case nodeKind::ContinueExpr: {
-        if (loops.size() <= loop_barrier) fail(node.id, "continue has no accessible loop target");
-        Flow flow;
-        flow.normal = false;
-        flow.continues.insert(loops.back().node);
-        auto res = value(never, move(flow));
-        res.jump_target = loops.back().node;
+    if (symbol.kind == NameKind::Constant) {
+        res.constant_value = result.constants.at(symbol.id);
+        res.type = res.constant_value->type;
         return res;
     }
-    case nodeKind::ReturnExpr: {
-        const auto& ret = static_cast<const ReturnExpr&>(node);
-        Flow operand;
-        if (ret.value) operand = consume(*ret.value, return_type).flow;
-        else if (return_type != unit) fail(node.id, "bare return requires a unit result");
-        Flow jump;
-        jump.normal = false;
-        jump.returns = true;
-        auto res = value(never, sequence(std::move(operand), jump));
-        res.jump_target = current_function;
-        return res;
-    }
-    default: throw logic_error("unexpected AST expression node");
-    }
+    res.category = Category::Callable;
+    res.callable = callable(symbol, node.id);
+    return res;
+}
+
+ExprInfo Checker::visit(const ContinueExpr& node, TypeId) {
+    if (loops.size() <= loop_barrier) fail(node.id, "continue has no accessible loop target");
+    Flow flow;
+    flow.normal = false;
+    flow.continues.insert(loops.back().node);
+    auto res = value(never, move(flow));
+    res.jump_target = loops.back().node;
+    return res;
+}
+
+ExprInfo Checker::visit(const ReturnExpr& node, TypeId) {
+    Flow operand;
+    if (node.value) operand = consume(*node.value, return_type).flow;
+    else if (return_type != unit) fail(node.id, "bare return requires a unit result");
+    Flow jump;
+    jump.normal = false;
+    jump.returns = true;
+    auto res = value(never, sequence(move(operand), jump));
+    res.jump_target = current_function;
+    return res;
 }
 
 Flow Checker::statement(const Stmtnode& node) {
-    switch (node.kind) {
-    case nodeKind::EmptyStmt: return {};
-    case nodeKind::LetStmt: {
-        const auto& let = static_cast<const LetStmt&>(node);
-        auto type = let.annotation ? resolveType(*let.annotation, self_type) : unknown;
-        auto initializer = consume(*let.initializer, type);
-        if (type == unknown) type = initializer.type;
-        auto id = bind(let.binding.name, type, let.binding.mutability == Mutability::Mutable, node.id);
-        result.bindings[node.id] = id;
-        return initializer.flow;
-    }
-    case nodeKind::ExprStmt: {
-        const auto& stmt = static_cast<const ExprStmt&>(node);
-        auto info = consume(*stmt.expression, stmt.has_semicolon ? unknown : unit);
-        if (stmt.has_semicolon) result.expressions.at(stmt.expression->id).use->mode = UseMode::Discard;
-        return info.flow;
-    }
-    default: throw logic_error("unexpected AST statement node");
-    }
+    return StatementVisitor::dispatch(node);
 }
 
-ExprInfo Checker::block(const BlockExpr& node, TypeId expected) {
+Flow Checker::visit(const EmptyStmt&) {
+    return {};
+}
+
+Flow Checker::visit(const LetStmt& node) {
+    auto type = node.annotation ? resolveType(*node.annotation, self_type) : unknown;
+    auto initializer = consume(*node.initializer, type);
+    if (type == unknown) type = initializer.type;
+    auto id = bind(node.binding.name, type, node.binding.mutability == Mutability::Mutable, node.id);
+    result.bindings[node.id] = id;
+    return initializer.flow;
+}
+
+Flow Checker::visit(const ExprStmt& node) {
+    auto info = consume(*node.expression, node.has_semicolon ? unknown : unit);
+    if (node.has_semicolon) result.expressions.at(node.expression->id).use->mode = UseMode::Discard;
+    return info.flow;
+}
+
+ExprInfo Checker::visit(const BlockExpr& node, TypeId expected) {
     scopes.emplace_back();
     Flow flow;
     // 即使 flow.normal 已经为 false，也必须检查后续语句。
@@ -175,7 +162,7 @@ ExprInfo Checker::block(const BlockExpr& node, TypeId expected) {
     return value(type, move(flow));
 }
 
-ExprInfo Checker::array(const ArrayExpr& node, TypeId expected) {
+ExprInfo Checker::visit(const ArrayExpr& node, TypeId expected) {
     const auto target = result.types[expected];
     TypeId element_expected = target.kind == TypeKind::Array ? target.element : unknown;
     vector<PendingUse> elements;
@@ -193,7 +180,7 @@ ExprInfo Checker::array(const ArrayExpr& node, TypeId expected) {
     return value(result.types.array(element_type, static_cast<uint32_t>(node.elements.size())), move(flow));
 }
 
-ExprInfo Checker::repeat(const ArrayRepeatExpr& node, TypeId expected) {
+ExprInfo Checker::visit(const ArrayRepeatExpr& node, TypeId expected) {
     auto target = result.types[expected];
     auto element_expected = target.kind == TypeKind::Array ? target.element : unknown;
     const auto count = constExpr(*node.count, usize, self_type);
@@ -203,7 +190,7 @@ ExprInfo Checker::repeat(const ArrayRepeatExpr& node, TypeId expected) {
     return value(result.types.array(element_type, count.bits), move(element.flow));
 }
 
-ExprInfo Checker::structure(const StructExpr& node) {
+ExprInfo Checker::visit(const StructExpr& node, TypeId) {
     if (node.path.size() != 1) fail(node.id, "struct construction requires a user struct name");
     auto type = resolveSegment(node.path.front(), node.id, self_type);
     if (result.types[type].kind != TypeKind::Struct) fail(node.id, "construction requires a user-defined struct");
@@ -226,7 +213,7 @@ ExprInfo Checker::structure(const StructExpr& node) {
     return res;
 }
 
-ExprInfo Checker::conditional(const IfExpr& node, TypeId expected) {
+ExprInfo Checker::visit(const IfExpr& node, TypeId expected) {
     auto condition = consume(*node.condition, boolean);
     if (!node.else_branch) {
         auto then = consume(*node.then_branch, unit);
@@ -238,7 +225,7 @@ ExprInfo Checker::conditional(const IfExpr& node, TypeId expected) {
     return value(type, sequence(move(condition.flow), alternatives(move(then.flow), otherwise.flow)));
 }
 
-ExprInfo Checker::loop(const LoopExpr& node, TypeId expected) {
+ExprInfo Checker::visit(const LoopExpr& node, TypeId expected) {
     loops.push_back({node.id, false, expected, {}});
     auto body = consume(*node.body, unit);
     auto context = move(loops.back());
@@ -250,7 +237,7 @@ ExprInfo Checker::loop(const LoopExpr& node, TypeId expected) {
     return value(type, move(flow));
 }
 
-ExprInfo Checker::whileLoop(const WhileExpr& node) {
+ExprInfo Checker::visit(const WhileExpr& node, TypeId) {
     // 条件中的跳转不能命中当前 while，也不能命中外层 loop。
     const auto previous_barrier = loop_barrier;
     loop_barrier = loops.size();
@@ -265,7 +252,7 @@ ExprInfo Checker::whileLoop(const WhileExpr& node) {
     return value(unit, sequence(move(condition.flow), flow));
 }
 
-ExprInfo Checker::breakExpr(const BreakExpr& node) {
+ExprInfo Checker::visit(const BreakExpr& node, TypeId) {
     if (loops.size() <= loop_barrier) fail(node.id, "break has no accessible loop target");
     const auto index = loops.size() - 1;
     const auto target = loops[index].node;

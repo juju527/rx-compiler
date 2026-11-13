@@ -1,0 +1,125 @@
+\appendix
+\lesson{常用语法速查}{app:syntax}
+本表是片段模板，不是完整模块。假定使用前相应的参数、地址、标签和外部函数已经定义，且类型与存储有效。
+
+{\small
+\begin{longtable}{@{}p{28mm}p{105mm}p{25mm}@{}}
+\toprule
+用途 & 语法形状 & 结果类型 \\
+\midrule
+\endfirsthead
+\toprule
+用途 & 语法形状 & 结果类型 \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+整数加法 & \code{\%r = add i32 \%a, \%b} & i32 \\
+整数取负 & \code{\%r = sub i32 0, \%x} & i32 \\
+有符号除法 & \code{\%r = sdiv i32 \%a, \%b} & i32 \\
+无符号余数 & \code{\%r = urem i32 \%a, \%b} & i32 \\
+按位与 & \code{\%r = and i32 \%a, \%b} & i32 \\
+bool 取反 & \code{\%r = xor i1 \%flag, true} & i1 \\
+算术右移 & \code{\%r = ashr i32 \%x, \%count} & i32 \\
+逻辑右移 & \code{\%r = lshr i32 \%x, \%count} & i32 \\
+相等比较 & \code{\%r = icmp eq i32 \%a, \%b} & i1 \\
+有符号小于 & \code{\%r = icmp slt i32 \%a, \%b} & i1 \\
+无符号小于 & \code{\%r = icmp ult i32 \%a, \%b} & i1 \\
+bool 扩展 & \code{\%r = zext i1 \%flag to i32} & i32 \\
+字节转条件 & \code{\%r = trunc i8 \%byte to i1} & i1 \\
+栈槽 & \code{\%p = alloca i32, align 4} & ptr \\
+读整数 & \code{\%v = load i32, ptr \%p, align 4} & i32 \\
+写整数 & \code{store i32 \%v, ptr \%p, align 4} & 无 \\
+读指针字段 & \code{\%p = load ptr, ptr \%slot} & ptr \\
+数组元素地址 & \code{\%p = getelementptr [3 x i32],}\newline
+  \code{ptr \%a, i32 0, i32 \%i} & ptr \\
+结构体字段 & \code{\%p = getelementptr \%Record,}\newline
+  \code{ptr \%r, i32 0, i32 1} & ptr \\
+函数调用 & \code{\%r = call i32 @f(i32 \%x)} & i32 \\
+无结果调用 & \code{call void @g(i32 \%x)} & 无 \\
+无条件跳转 & \code{br label \%next} & 无 \\
+条件跳转 & \code{br i1 \%cond, label \%yes, label \%no} & 无 \\
+返回整数 & \code{ret i32 \%r} & 无 \\
+返回 Unit & \code{ret void} & 无 \\
+不可达出口 & \code{unreachable} & 无 \\
+phi（拓展） & \code{\%r = phi i32 [ \%a, \%left ],}\newline
+  \code{[ \%b, \%right ]} & i32 \\
+\end{longtable}
+}
+
+\textbf{表外前提也要检查。}移位计数按项目规则屏蔽；除法的除数不能为 0，有符号最小值除以 -1 的情况也不能直接当成普通有效运算。当前 Rx 规范将相应异常算术排除在有效测试输入之外，具体范围仍以规范为准。内存地址必须有效，bool 字节按项目约定为 0 或 1。
+
+\lesson{术语、示例索引与继续阅读}{app:reading}
+\subsection{最小术语表}
+\begin{tabularx}{\linewidth}{@{}p{43mm}Y@{}}
+\toprule
+术语 & 本讲义中的含义 \\
+\midrule
+Module / 模块 & 顶层容器，含类型声明、全局对象和函数。\\
+Instruction / 指令 & 一步明确的计算、访问、调用或控制流操作。\\
+Operand / 操作数 & 指令使用的值，可能是常量、参数或已有结果。\\
+SSA value & 有一个静态定义的局部值，不等于可反复赋值的源变量。\\
+Basic block / 基本块 & 从标签开始、以终结指令结束的指令序列。\\
+Terminator / 终结指令 & 决定该块的出口，例如 br、ret。\\
+CFG / 控制流图 & 用块和跳转边表示可能的执行路径。\\
+Predecessor / 前驱 & 有控制流边进入当前块的块。\\
+Dominance / 支配 & 到达某个位置的所有入口路径都经过另一位置。\\
+GEP & 根据对象布局与索引计算地址的指令。\\
+ABI & 调用与布局约定，包括参数、返回、大小和对齐等。\\
+Lowering / 降低 & 将较高层语义翻译成较低层表示的过程。\\
+Poison & 错误承诺或某些无效操作产生的特殊值，后续使用可能导致未定义行为；不是一个普通的随机整数。\\
+\bottomrule
+\end{tabularx}
+
+\subsection{配套示例索引}
+\begin{tabularx}{\linewidth}{@{}p{50mm}Yp{36mm}@{}}
+\toprule
+文件（均位于 examples） & 学习重点 & 预期输出 \\
+\midrule
+\code{01\_print42.ll} & 模块与入口包装 & 42 \\
+\code{02\_add.ll} & 参数、call、返回值 & 42 \\
+\code{03\_variables.ll} & alloca/load/store & 42 \\
+\code{04\_if\_slots.ll} & 分支与合流槽 & 42 \\
+\code{05\_short\_circuit.ll} & 短路及副作用 & 0、999、1 \\
+\code{06\_loop.ll} & 循环与零次迭代 & 55、0 \\
+\code{07\_arrays.ll} & 数组与动态下标 & 42 \\
+\code{08\_structs.ll} & 字段布局、bool & 42、1 \\
+\code{09\_phi.ll} & SSA 合流拓展 & 42 \\
+\code{10\_references.ll} & 指针槽与所指对象 & 42 \\
+\code{11\_aggregate\_return.ll} & 隐藏输出地址 & 42 \\
+\code{12\_scalar\_rules.ll} & 回绕、比较、右移 & 0、1、0、-4、2147483644 \\
+\bottomrule
+\end{tabularx}
+表中多个数字分别占一行；精确输出以同名 \code{.out} 文件为准，最后一行也有换行。
+
+\subsection{官方资料怎样读}
+以下链接已按 LLVM 22.1.0 固定版本。建议“先用小例子建立认识，再按需查手册”，不必从头背完 LangRef。
+
+\begin{enumerate}
+ \item \textbf{第一份教程：}
+ \href{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl03.html}{Kaleidoscope 第 3 章：Code generation to LLVM IR}。
+ 重点看 Value、Function、BasicBlock、IRBuilder 之间的关系，以及常量、二元运算和调用的生成。教程语言主要用浮点数，本项目使用整数，不要直接照抄 fadd 等选择。
+ \item \textbf{可变变量：}
+ \href{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl07.html}{Kaleidoscope 第 7 章：Mutable Variables}。
+ 重点看为什么 alloca/load/store 适合基础实现，以及 LLVM 后续如何将适合的栈变量提升成 SSA 值。优化章节可后读。
+ \item \textbf{控制流：}
+ \href{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html}{Kaleidoscope 第 5 章：Control Flow}。
+ 重点看 if、循环、基本块切换和 phi。理解其 CFG 思路，再适配项目目前的合流槽方案。
+ \item \textbf{地址专项：}
+ \href{https://releases.llvm.org/22.1.0/docs/GetElementPtr.html}{The Often Misunderstood GEP Instruction}。
+ 重点看第一个索引、数组和结构体的区别，以及为什么 GEP 不进行内存解引用。
+ \item \textbf{新旧资料衔接：}
+ \href{https://releases.llvm.org/22.1.0/docs/OpaquePointers.html}{Opaque Pointers}。
+ 看懂旧例子中的 \code{i32*} 与新例子中 \code{ptr} 的差异，明确类型信息现在写在 load/store/GEP 等操作上。
+ \item \textbf{权威语法查询：}
+ \href{https://releases.llvm.org/22.1.0/docs/LangRef.html}{LLVM Language Reference Manual}。
+ 遇到一条指令时，查它的语法、参数要求和语义；尤其核对 align、inbounds、nsw 等附加承诺。先读 Integer Type、Function、Basic Block 及本讲义出现的指令即可。
+ \item \textbf{源语言边界：}
+ \href{https://github.com/ACMClassCourse-2025/rx-compiler-specification/blob/master/src/backend.md}{Rx 规范：后端目标}，
+ \href{https://github.com/ACMClassCourse-2025/rx-compiler-specification/blob/master/src/expressions/operator-expr.md}{Rx 规范：运算符表达式}。
+ 它们回答“本项目需要什么行为”；本仓库的 \code{docs/ir.md} 与 \code{docs/semantic.md} 则说明如何在现有实现中组织这些信息。
+\end{enumerate}
+
+\textbf{暂时可以放后。}调试元数据、异常处理、原子指令、向量指令、内联汇编、自定义 pass、复杂优化属性和完整 SSA 构造，都不是打印、标量、控制流和基础聚合阶段的前置条件。
+
+\textbf{资料范围。}本讲义是基于官方语义和当前项目约定编写的中文教学说明，不是 LLVM 或 Rx 规范的完整替代。LLVM 22 的通用语法与项目选择已分别标注；项目代码继续演进时，接口细节以仓库实际版本为准。

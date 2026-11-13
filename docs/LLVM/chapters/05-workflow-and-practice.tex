@@ -1,0 +1,126 @@
+\lesson{验证、运行与排错}{sec:workflow}
+\aim{建立“手写小例子、检查 IR、编译、运行、核对输出”的学习闭环。}
+
+\subsection{三种检查回答不同问题}
+\begin{tabularx}{\linewidth}{@{}p{35mm}Y@{}}
+\toprule
+检查层次 & 能回答的问题 \\
+\midrule
+IR 结构验证 & 类型、SSA 使用、基本块终结和指令约束是否成立。\\
+本机执行 & 在宿主平台上，例子的输出是否符合预期。\\
+RV32 目标执行 & 目标布局、调用约定、RISC-V 后端与 REIMU 是否一起工作。\\
+\bottomrule
+\end{tabularx}
+第三层是项目验收必需的。前两层有助于学习和定位问题，但不能替代目标链路。即使三层都通过一组例子，也只验证这组例子覆盖到的行为。
+
+\subsection{先在本机跑完配套例子}
+以下命令从仓库根目录开始，只把产物写进 \code{docs/LLVM}：
+\begin{lstlisting}[language={},numbers=none]
+cd docs/LLVM
+python3 verify_examples.py --mode native --clang /usr/bin/clang
+\end{lstlisting}
+脚本读取 \code{examples/manifest.json}，在 \code{build/native/} 生成去掉两行目标信息的副本，分别编译、运行，并逐字节比对 \code{.out} 文件。原始 RV32 示例保持原样。
+
+交付时的实际检查结果是：\textbf{12 个示例全部通过本机编译和输出核对}。使用 Apple Clang 21，在 ARM64 macOS 执行。本次环境未提供 \code{clang-22}，因此没有宣称 RV32 / REIMU 目标运行已通过。编译器版本、实际命令与逐例输出保存在 \code{build/validation-report.native.json}。
+
+\subsection{使用 LLVM 22 做结构检查}
+准备好带版本号的 LLVM 22 工具后，可在 \code{docs/LLVM} 中执行：
+\begin{lstlisting}[language={},numbers=none]
+mkdir -p build/check
+llvm-as-22 examples/01_print42.ll -o build/check/01_print42.bc
+opt-22 -passes=verify -disable-output build/check/01_print42.bc
+\end{lstlisting}
+\code{llvm-as} 把可读文本转换成 bitcode；\code{opt} 的 verify pass 检查 IR 的有效性。不同安装方式可能把工具命名为 \code{llvm-as}、\code{opt}，应先核对版本再替换命令名。
+
+这不会执行程序，也不验证 printf 的格式串含义、源语言求值顺序或数组快照是否正确。
+
+\subsection{项目目标链路：LLVM 22 到 RV32IM}
+在 \code{docs/LLVM} 中，单个示例可按项目同样的目标参数编译：
+\begin{lstlisting}[language={},numbers=none]
+mkdir -p build/target
+clang-22 -S -x ir examples/01_print42.ll \
+  -o build/target/01_print42.s \
+  --target=riscv32-unknown-none-elf \
+  -march=rv32im -mabi=ilp32 -O0 \
+  -mllvm -riscv-no-aliases
+python3 ../../scripts/strip_asm_debug.py build/target/01_print42.s
+\end{lstlisting}
+\code{-S} 输出汇编，\code{-x ir} 明确输入语言，target/march/mabi 指定 RV32IM / ILP32；其余参数与项目运行链路一致。注意：不能用本机 ARM64 汇编代替这里的 RISC-V 汇编。
+
+已有 REIMU 可执行文件时，可让配套脚本批量执行完整目标链路：
+\begin{lstlisting}[language={},numbers=none]
+python3 verify_examples.py --mode target \
+  --clang /absolute/path/to/clang-22 \
+  --reimu /absolute/path/to/reimu
+\end{lstlisting}
+两处绝对路径需要替换为自己的工具位置。脚本要求 Clang 22，输出汇编、日志和模拟器结果到 \code{build/target/}；缺少工具时明确失败。报告中的
+\code{target\_\allowbreak execution\_\allowbreak verified}
+只有在目标模式全部通过时才会为 true。
+
+\subsection{自己改例子时的顺序}
+\begin{enumerate}
+ \item 复制一个已通过的例子到本目录的 \code{build/experiments/}。
+ \item 一次只改变一个因素：常量、谓词、字段号或一条控制流边。
+ \item 先手算输出，再编译运行。
+ \item 观察错误属于解析、验证、编译还是运行输出不符。
+ \item 最后才把相同结构搬进自己的 IR Builder。
+\end{enumerate}
+大多数例子直接用返回 i32 的机器 main 来聚焦语法；第 1 个例子额外展示内部源 main 包装。将它们接到 Rx 编译器时，应恢复项目统一的源函数与机器入口约定。
+
+\subsection{常见错误的定位表}
+\begin{tabularx}{\linewidth}{@{}p{47mm}Y@{}}
+\toprule
+现象 & 优先检查 \\
+\midrule
+结果名重复、解析失败 & 是否对同一 \code{\%name} 定义两次；每个新计算是否获得新名字。\\
+operand 类型不匹配 & i1/i8/i32 是否在边界转换；load 写的是内容类型还是指针类型。\\
+基本块缺少终结指令 & 是否漏掉 ret/br；是否以为标签之间会自动顺序执行。\\
+定义不支配使用 & 值是否只在一个分支中定义，却被所有合流路径使用。\\
+字符串数组类型不匹配 & 数组长度是否包含换行和末尾零字节。\\
+输出了额外内容 & 短路右侧是否提前调用；循环退出后是否仍生成了副作用。\\
+结构体字段读错 & 字段号、声明顺序、存储类型和目标布局是否一致。\\
+结果偶尔不稳定 & 是否读了未初始化槽、过期地址，或写入了错误对象。\\
+本机成功、目标失败 & 编译器版本、target/march/mabi、指针宽度和运行时接口。\\
+\bottomrule
+\end{tabularx}
+
+\lesson{动手练习与参考答案}{sec:practice}
+\aim{不用背诵大段语法，能够预测结果、修改示例，并解释修改为什么成立。}
+
+\subsection{练习：先独立回答}
+\begin{enumerate}[label=\textbf{\arabic*.}]
+ \item \textbf{从 42 到 43。}修改第 1 个例子，让它打印 43。需要改变格式串、函数签名或机器 main 的返回值吗？
+ \item \textbf{旧值与新值。}在第 3 个例子最后一次 store 后，依次打印 \code{\%old} 和重新 load 得到的值。两行分别是什么？
+ \item \textbf{有符号比较。}让 max 的实参变成 -1 和 1。分别使用 sgt 和 ugt 比较，会选出哪个值？若都以 \code{\%d} 打印，屏幕上是什么？
+ \item \textbf{合流槽。}删除第 4 个例子 else 块中的 store，但保留 br。语法上可写出来，为什么仍然不是正确的 max？
+ \item \textbf{短路副作用。}第 5 个例子调用 false、true 时输出什么？若把 rhs 调用提前到条件跳转前，输出会如何变化？
+ \item \textbf{循环目标。}第 6 个例子中 continue 应跳向哪个块？为什么不能跳回 entry？n 为 0 时是否进入 body？
+ \item \textbf{GEP 的步长。}对 \code{[3 x i32]} 的地址，\code{0, 2} 选择哪里？\code{1, 0} 和它相同吗？
+ \item \textbf{字段布局。}RV32 中 \code{\{ i8, i32, i8 \}} 的第二个字段偏移和整体大小分别是多少？如果仅把三个字段大小相加，会漏掉什么？
+ \item \textbf{bool 转换。}将 i8 的数值 2 trunc 到 i1 得到什么？若要测试任意 i32 是否非零，应使用什么指令？
+ \item \textbf{返回聚合。}为何第 11 个例子让调用者分配结果槽，再把地址传给被调方？能否改成返回被调方局部 alloca 的地址，并在返回后读取？
+\end{enumerate}
+
+\subsection{参考答案}
+\begin{enumerate}[label=\textbf{\arabic*.}]
+ \item 将源函数中传给打印包装的实参改成 \code{i32 43}。格式串仍打印十进制整数，签名不变，机器 main 仍返回状态码 0。
+ \item 依次为 40、42。\code{\%old} 保存先前那一次 load 的结果；store 改的是内存，不会回头修改已有 SSA 值。
+ \item sgt 按有符号解释，选择 1；ugt 把 -1 的位模式看作最大的 32 位无符号整数，选择全 1 的位模式。用 \code{\%d} 打印时分别看到 1 和 -1。比较方式与打印解释是两个独立边界。
+ \item 当 a 不大于 b，路径会从 else 到 merge，却没有给结果槽写入 b。merge 的 load 不能得到定义良好的 max 结果。补回 store，或采用正确的 phi 合流。
+ \item 正确顺序是 0、999、1。提前调用后，false 那次也打印 999，于是变成 999、0、999、1。结果布尔值可能看似相同，副作用已违反短路语义。
+ \item continue 跳到 test。entry 包含分配与初始赋值，跳回去会重置状态，而且函数入口块不能有前驱。n=0 时第一次检查失败，直接到 exit，结果为 0。
+ \item \code{0, 2} 从当前数组内部取第 3 个元素，偏移 8 字节。\code{1, 0} 先跨过整个 12 字节数组，再取下一份数组的第一个元素；若只分配了这一份数组，不能通过该地址读取另一个数组。
+ \item 偏移 4，总大小 12。字段之间与结构体尾部都可能有 padding，不能只算 1+4+1。
+ \item 2 的最低位为 0，所以 trunc 得到 false。测试一般整数是否非零应写 \code{icmp ne i32 \%x, 0}；trunc 不是一般意义的“非零转 true”。
+ \item 调用者的槽在被调函数返回后仍有效。被调方局部 alloca 的存储在该调用结束后不再有效，返回其地址再读取不成立。隐藏输出地址使结果从一开始就写到调用者提供的存储中。
+\end{enumerate}
+
+\subsection{完成入门的自检标准}
+能够在不看答案的情况下完成以下四件事，就可以把主要精力转回项目实现：
+\begin{itemize}
+ \item 读一段 IR，给每个 SSA 值标明类型，并说明每个 ptr 指向的对象。
+ \item 画出分支和循环的基本块，指出每个块的终结指令与可能前驱。
+ \item 手写变量更新、短路、数组索引与字段访问，并预测输出。
+ \item 对照 semantic 结果解释“为什么选这条指令”，尤其是有符号运算、bool 存储和聚合快照。
+\end{itemize}
+不必等到掌握全部 LLVM 指令才开始编写 IR。以第 1 个例子为最小闭环，每实现一类源表达式，就补一个能区分正确与错误行为的小程序。

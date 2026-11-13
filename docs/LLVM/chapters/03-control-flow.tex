@@ -1,0 +1,158 @@
+\lesson{基本块、分支与短路求值}{sec:branches}
+\aim{把 if 和逻辑短路画成控制流图，再逐块写出合法的 LLVM IR。}
+
+\subsection{基本块必须有明确出口}
+基本块（basic block）是一段从入口顺序执行、最后由终结指令决定去向的代码。函数体的第一个块是入口块。块的文本排列顺序不决定执行顺序：LLVM 没有“这一块写完，就自动落到下一块”的规则。
+
+\begin{lstlisting}
+br label %next
+br i1 %condition, label %yes, label %no
+ret i32 %value
+ret void
+\end{lstlisting}
+以上是四种不同的出口模板，不应连续放进同一个块。无条件 br 直接跳转；条件 br 需要 i1，true 选择第一个目标，false 选择第二个目标；ret 结束当前函数调用。
+
+\takeaway{每个基本块必须以一条终结指令结束。终结指令后不能继续往该块追加指令。要执行下一段代码，就创建或选择相应的基本块。}
+
+\subsection{if 表达式：用槽保存合流结果}
+下面的源函数根据条件选择一个值：
+\begin{lstlisting}[language=Rx,numbers=none]
+fn max(a: i32, b: i32) -> i32 {
+    if a > b { a } else { b }
+}
+\end{lstlisting}
+控制流图中的箭头表示可能的跳转：
+\begin{center}
+\begin{tikzpicture}[node distance=8mm and 22mm]
+\node[flowbox] (entry) {entry\\比较 a 与 b};
+\node[flowbox,below left=of entry] (yes) {then\\保存 a};
+\node[flowbox,below right=of entry] (no) {else\\保存 b};
+\node[flowbox,below right=of yes] (merge) {merge\\读出结果并返回};
+\draw[flowarrow] (entry)--node[above left,font=\small]{true}(yes);
+\draw[flowarrow] (entry)--node[above right,font=\small]{false}(no);
+\draw[flowarrow] (yes)--(merge);
+\draw[flowarrow] (no)--(merge);
+\end{tikzpicture}
+\end{center}
+配套文件 \code{examples/04\_if\_slots.ll} 中的函数如下。外层 main 调用 \code{max\_slot(17, 42)}，输出 42。
+\lstinputlisting[firstline=13,lastline=28]{examples/04_if_slots.ll}
+
+result.addr 在入口创建，因此两个分支都能访问。同一次调用只会走进其中一个分支，而该分支会先写结果槽再跳到 merge。merge 中读取的是本次实际执行路径留下的值。
+
+如果某个分支已经 ret，它不会跳到 merge，也不必给 merge 的结果槽写值。生成器需要检查的是：\textbf{所有正常抵达合流块的路径都提供了结果}。若两个分支都不会正常结束，整个 if 没有正常结果，不应再读取结果槽。
+
+\subsection{短路意味着右边可能完全不执行}
+Rx 的 \code{\&\&} 和 \code{||} 会根据左操作数决定是否求右操作数。不能先把左右两边全部生成并执行，再用 \code{and} 或 \code{or} 合并结果。
+
+配套文件 \code{examples/05\_short\_circuit.ll} 中，\code{@rhs} 会打印 999，然后返回 true。下面的函数实现 \code{left \&\& rhs()}：
+\lstinputlisting[firstline=19,lastline=35]{examples/05_short_circuit.ll}
+
+\begin{itemize}
+ \item left 为 false：直接进入 skip.rhs，保存 false，\code{@rhs} 不会被调用。
+ \item left 为 true：进入 eval.rhs，调用右侧并保存其结果。
+ \item 两条路径在 merge 汇合；bool 仍遵守“计算 i1、存储 i8”的项目约定。
+\end{itemize}
+main 先调用 false，再调用 true，并把两次逻辑结果转为整数打印。完整程序输出为：
+\begin{lstlisting}[language={},numbers=none]
+0
+999
+1
+\end{lstlisting}
+第一行前没有 999，正是短路生效的证据。实现 \code{left || rhs()} 时，left 为 true 的路径直接保存 true；只有 false 路径才调用 rhs。
+
+\textbf{拓展：}\code{select} 可以根据条件选择两个已有 SSA 值，但不会撤销为计算它们已经发生的调用、读写或除法。因此它不能直接代替含副作用表达式的短路控制流；当前项目也不要求先实现它。
+
+\subsection{unreachable 不是“什么也不做”}
+\begin{lstlisting}
+dead:
+  unreachable
+\end{lstlisting}
+这条终结指令声明执行不应抵达此处。真的执行到它属于未定义行为。它不是普通 return，也不保证触发一个友好的错误提示，更不能拿来替代本应正常运行的分支。
+
+\projectnote{当前生成器可以保留一个没有正常前驱的预建 merge/exit 块，并用 unreachable 结束它。这依赖于确实没有有效执行路径抵达该块。Unit 表示正常结束但没有数据；NoReturn 表示没有正常后继，不能混成一种情况。}
+
+\checkq{如果将例子中的 \code{call @rhs} 移到 entry、条件跳转之前，false 路径还会短路吗？答案：不会，输出会多出 999。}
+\srcref{https://releases.llvm.org/22.1.0/docs/LangRef.html\#terminator-instructions}{LLVM 22：终结指令}
+
+\lesson{循环、支配关系与可选的 phi}{sec:loops}
+\aim{写出能更新局部变量的循环，理解跨基本块使用 SSA 值的限制。}
+
+\subsection{while 是一条带回边的路径}
+考虑从 1 累加到 n 的函数。这里只讨论不会使循环计数溢出的输入，例如 0 和 10：
+\begin{lstlisting}[language=Rx,numbers=none]
+fn sum_to(n: i32) -> i32 {
+    let mut i = 1;
+    let mut sum = 0;
+    while i <= n {
+        sum += i;
+        i += 1;
+    }
+    sum
+}
+\end{lstlisting}
+可以把它拆成 entry、test、body、exit 四块：
+\begin{center}
+\begin{tikzpicture}[node distance=8mm and 22mm]
+\node[flowbox] (entry) {entry\\创建槽并初始化};
+\node[flowbox,below=of entry] (test) {test\\检查 i $\leq$ n};
+\node[flowbox,below=of test] (body) {body\\累加并更新 i};
+\node[flowbox,right=of test] (exit) {exit\\读取 sum 并返回};
+\draw[flowarrow] (entry)--(test);
+\draw[flowarrow] (test)--node[right,font=\small]{true}(body);
+\draw[flowarrow] (test)--node[above,font=\small]{false}(exit);
+\draw[flowarrow] (body.west)--++(-12mm,0)|-(test.west);
+\end{tikzpicture}
+\end{center}
+\lstinputlisting[firstline=13,lastline=34]{examples/06_loop.ll}
+
+每次回到 test 都会重新 load i，所以能读到上一次循环体写入的新值。文本中 \code{\%i} 只有一处定义；这条 load 在运行时执行多次并不违反“静态单赋值”。SSA 的“静态”指的是程序结构里的定义位置，而不是指令一生只能执行一次。
+
+\begin{itemize}
+ \item while 的 continue 跳到 test，使条件重新求值。
+ \item while 的 break 跳到 exit。
+ \item 嵌套循环应使用当前内层循环的目标；外层目标不能被覆盖后丢失。
+ \item 入口 alloca 不在回边上，避免每次迭代重新申请局部存储。
+\end{itemize}
+\code{examples/06\_loop.ll} 依次测试 n=10 和 n=0，输出 55 和 0。第二个输入能检查“第一次条件就为 false”的路径。
+
+\subsection{定义必须支配普通使用}
+先用自然语言理解支配（dominance）：如果从函数入口走到使用位置的每一条路径，都必须经过某个定义，那么这个定义支配该使用。普通 SSA 操作数的定义必须满足这一要求；同块内还要先定义再使用。
+
+下面是错误片段：
+\begin{lstlisting}
+; INVALID: %only.then is absent on the else path.
+then:
+  %only.then = add i32 %a, 1
+  br label %merge
+else:
+  br label %merge
+merge:
+  ret i32 %only.then
+\end{lstlisting}
+如果从 else 到达 merge，就没有经过 \code{\%only.then} 的定义。名字在文本中出现得更早，不能替代控制流上的保证。
+
+本项目第一版可以用结果槽解决这类问题：在入口分配槽，每条正常前驱路径分别保存值，在 merge 读取。槽方案仍需保证“每条抵达路径都初始化”，LLVM 的一般类型检查不会自动证明你的源变量一定赋过值。
+
+\clearpage
+\subsection{可选阅读：phi 在合流处选择来源}
+LLVM 还提供 phi，直接把不同前驱边带来的值合并成一个 SSA 结果。下面与第 6 课的 max 函数行为相同：
+\lstinputlisting[firstline=13,lastline=24]{examples/09_phi.ll}
+
+核心一行按“值、前驱块”成对阅读：
+\begin{lstlisting}
+%result = phi i32 [ %a, %then ], [ %b, %else ]
+\end{lstlisting}
+刚才从 then 进入 merge，结果就取 a；从 else 进入，结果就取 b。phi 不重新比较条件，也不会重新执行两个分支。
+
+写 phi 时记住：
+\begin{enumerate}
+ \item phi 必须位于所在基本块的开头，排在普通指令之前。
+ \item incoming 项要匹配实际前驱；不能遗漏某条可能进入的前驱边。
+ \item 每个 incoming 值必须在对应前驱边上可用，而不要求它支配合流块内的所有路径。
+ \item 所有 incoming 值都要匹配 phi 声明的结果类型。
+\end{enumerate}
+循环也可以在头部用 phi 选择“第一次进入时的初值”和“回边带来的下一次值”。这留待理解 SSA 构造或优化时再做。
+
+\projectnote{当前核心 Opcode 没有 Phi，分支结果采用槽表示。学习 phi 能帮助阅读 LLVM 教程和优化结果，但实现第一个可用 IR 生成器不必先做 SSA 重命名、支配树或 mem2reg。}
+\takeaway{栈槽保存可变状态，phi 合并沿控制流传来的 SSA 值。两种机制都能表达分支和循环，基础实现应先把自己的表示约定贯彻一致。}
+\srcref{https://releases.llvm.org/22.1.0/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html}{官方教程第 5 章：控制流与 phi}
