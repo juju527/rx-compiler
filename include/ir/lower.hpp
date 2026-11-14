@@ -112,11 +112,25 @@ private:
     EvalResult lowerCallExpr(const AST::Exprnode&);
     Value emitFunctionCall(const FunctionABI&, const std::vector<Value>&);
     void emitFunctionReturn(Value);
-    FunctionABI buildFunctionABI(std::string, const sem::CallableInfo&);
-    Value valueFromABI(SourceTypeId, Operand);
+    FunctionABI buildFunctionABI(string, const semantic::CallableInfo&);
+    Value valueFromOperand(SourceTypeId, Operand);
     void emitEntryPoint();
 
+    // layout.cpp
+    semantic::Type sourceType(SourceTypeId) const;
+    bool isAggregate(SourceTypeId) const;
+    StorageLayout storageLayout(SourceTypeId);
+    TypeId valueReprType(SourceTypeId);
 
+    // storage.cpp
+    StorageSlot createStorageSlot(SourceTypeId);
+    Value loadScalar(Place);
+    void copyRepresentation(SourceTypeId, Operand destination, Operand source);
+    Value snapshot(const EvalResult&);
+    Value valueFromResultSlot(const StorageSlot&);
+    void storeValue(const StorageSlot& destination, Value);
+    Place materialize(const EvalResult&);
+    void copyPlaceContents(Place destination, Place source);
 };
 
 //lower.cpp
