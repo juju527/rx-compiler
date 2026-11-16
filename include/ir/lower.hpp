@@ -131,6 +131,20 @@ private:
     void storeValue(const StorageSlot& destination, Value);
     Place materialize(const EvalResult&);
     void copyPlaceContents(Place destination, Place source);
+
+    // places.cpp
+    Place projectField(Place, size_t);
+    Operand vecFieldAddress(Place, VecField);
+    Place projectElement(Place, Operand index);
+    Place dereference(const EvalResult&);
+    EvalResult lowerPlaceExpr(const AST::Exprnode&);
+
+    // expressions.cpp: entrypoints, statements, operators and constructors.
+    EvalResult lowerExpr(const AST::Exprnode&);
+    EvalResult lowerExprCore(const AST::Exprnode&);
+    EvalResult lowerStatement(const AST::Stmtnode&);
+    EvalResult lowerAggregateExpr(const AST::Exprnode&);
+    Operand emitScalarBinaryOp(AST::BinaryOp, SourceTypeId, Operand, Operand);
 };
 
 //lower.cpp
